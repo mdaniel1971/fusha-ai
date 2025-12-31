@@ -105,10 +105,10 @@ Open [http://localhost:3000](http://localhost:3000)
 
 ### Development
 
-- **typescript** - Type safety. Catches errors before runtime.
+- **typescript** - Type safety. Catches errors before runtime.`
 - **@types/*** - Type definitions for React and Node.
 - **eslint / eslint-config-next** - Code linting. Catches common mistakes.
 
-## Licence
+## Licence`
 
 This project is a labour of love to help people understand the Quran.

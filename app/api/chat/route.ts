@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { chat } from '@/lib/anthropic';
+import { supabase } from '@/lib/supabase';
 
 // System prompt for FushaAI teacher
 // This is the minimal version - grounded in vocabulary from database
@@ -43,33 +44,52 @@ Log each error separately. If no errors, no log.
 ## Start
 Greet the student and begin.`;
 
-// TODO: Replace with actual vocabulary from database
-const FATIHA_VOCABULARY = `
-- بِسْمِ (bismi) - in the name of
-- اللَّهِ (Allah) - God
-- الرَّحْمَٰنِ (ar-Rahman) - The Most Gracious
-- الرَّحِيمِ (ar-Raheem) - The Most Merciful
-- الْحَمْدُ (al-hamdu) - praise
-- لِلَّهِ (lillahi) - to/for God
-- رَبِّ (rabbi) - Lord
-- الْعَالَمِينَ (al-'alameen) - the worlds
-- مَالِكِ (maliki) - Master/Owner
-- يَوْمِ (yawmi) - day
-- الدِّينِ (ad-deen) - judgement/religion
-- إِيَّاكَ (iyyaka) - You alone
-- نَعْبُدُ (na'budu) - we worship
-- نَسْتَعِينُ (nasta'een) - we seek help
-- اهْدِنَا (ihdina) - guide us
-- الصِّرَاطَ (as-sirat) - the path
-- الْمُسْتَقِيمَ (al-mustaqeem) - the straight
-- صِرَاطَ (sirat) - path
-- الَّذِينَ (alladhina) - those who
-- أَنْعَمْتَ (an'amta) - You have blessed
-- عَلَيْهِمْ ('alayhim) - upon them
-- غَيْرِ (ghayri) - not/other than
-- الْمَغْضُوبِ (al-maghdubi) - those who earned anger
-- الضَّالِّينَ (ad-dalleen) - those who went astray
-`;
+// Fetch vocabulary for a surah from the database
+async function fetchSurahVocabulary(surahNumber: number): Promise<string> {
+  // First get the verse IDs for this surah
+  const { data: verses, error: versesError } = await supabase
+    .from('verses')
+    .select('id, verse_number')
+    .eq('surah_id', surahNumber)
+    .order('verse_number', { ascending: true });
+
+  if (versesError) {
+    console.error('Error fetching verses:', JSON.stringify(versesError, null, 2));
+    throw new Error('Failed to fetch verses from database');
+  }
+
+  if (!verses || verses.length === 0) {
+    return 'No verses found for this surah.';
+  }
+
+  const verseIds = verses.map(v => v.id);
+
+  // Now get words for those verses
+  const { data: words, error: wordsError } = await supabase
+    .from('words')
+    .select('text_arabic, translation_english, part_of_speech, verse_id, word_position')
+    .in('verse_id', verseIds)
+    .order('verse_id', { ascending: true })
+    .order('word_position', { ascending: true });
+
+  if (wordsError) {
+    console.error('Error fetching words:', JSON.stringify(wordsError, null, 2));
+    throw new Error('Failed to fetch words from database');
+  }
+
+  if (!words || words.length === 0) {
+    return 'No vocabulary loaded for this surah.';
+  }
+
+  // Format vocabulary for the system prompt
+  return words
+    .map((word) => {
+      let entry = `- ${word.text_arabic} - ${word.translation_english}`;
+      if (word.part_of_speech) entry += ` [${word.part_of_speech}]`;
+      return entry;
+    })
+    .join('\n');
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -82,9 +102,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Fetch vocabulary from database (Al-Fatiha = surah 1)
+    const vocabulary = await fetchSurahVocabulary(1);
+
     // Build the system prompt with vocabulary
     const systemPrompt = SYSTEM_PROMPT
-      .replace('{{VOCABULARY}}', FATIHA_VOCABULARY)
+      .replace('{{VOCABULARY}}', vocabulary)
       .replace("student's native language", nativeLanguage);
 
     // Format conversation history for Claude
