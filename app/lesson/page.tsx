@@ -11,6 +11,7 @@ export default function LessonPage() {
   // Conversation state
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [streamingText, setStreamingText] = useState('');
   
   // Audio recording state
   const [isRecording, setIsRecording] = useState(false);
@@ -20,29 +21,73 @@ export default function LessonPage() {
   
   // Audio playback
   const [isPlaying, setIsPlaying] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   
-  // Refs for auto-scroll
+  // Refs
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const hasStarted = useRef(false);
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [messages, streamingText]);
 
-// Start the lesson - get initial greeting from FA
-const hasStarted = useRef(false);
+  // Start the lesson - get initial greeting from FA
+  useEffect(() => {
+    if (!hasStarted.current) {
+      hasStarted.current = true;
+      startLesson();
+    }
+  }, []);
 
-useEffect(() => {
-  if (!hasStarted.current) {
-    hasStarted.current = true;
-    startLesson();
+  // Speak text using ElevenLabs streaming
+  async function speakText(text: string) {
+    setIsPlaying(true);
+    
+    try {
+      const response = await fetch('/api/speak-stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+
+      if (!response.ok) {
+        throw new Error('TTS request failed');
+      }
+
+      // Create a blob from the streamed response
+      const audioBlob = await response.blob();
+      const audioUrl = URL.createObjectURL(audioBlob);
+      
+      // Play the audio
+      const audio = new Audio(audioUrl);
+      audioRef.current = audio;
+      
+      audio.onended = () => {
+        setIsPlaying(false);
+        URL.revokeObjectURL(audioUrl);
+        audioRef.current = null;
+      };
+
+      audio.onerror = () => {
+        setIsPlaying(false);
+        URL.revokeObjectURL(audioUrl);
+        audioRef.current = null;
+      };
+
+      await audio.play();
+    } catch (error) {
+      console.error('Error playing audio:', error);
+      setIsPlaying(false);
+    }
   }
-}, []);
 
   async function startLesson() {
     setIsLoading(true);
+    setStreamingText('');
+    
     try {
-      const response = await fetch('/api/chat', {
+      const response = await fetch('/api/chat-stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -50,13 +95,47 @@ useEffect(() => {
           conversationHistory: [],
         }),
       });
+
+      if (!response.ok) {
+        throw new Error('Chat request failed');
+      }
+
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+      let fullText = '';
+
+      if (reader) {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          const chunk = decoder.decode(value);
+          const lines = chunk.split('\n');
+
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const data = JSON.parse(line.slice(6));
+                if (data.type === 'text') {
+                  fullText += data.content;
+                  setStreamingText(fullText);
+                }
+              } catch (e) {
+                // Ignore parse errors
+              }
+            }
+          }
+        }
+      }
+
+      // Clean up error logs from display
+      const cleanText = fullText.replace(/\[ERROR_LOG\][\s\S]*?\[\/ERROR_LOG\]/g, '').trim();
+      setMessages([{ role: 'assistant', content: cleanText }]);
+      setStreamingText('');
       
-      const data = await response.json();
-      
-      if (data.response) {
-        setMessages([{ role: 'assistant', content: data.response }]);
-        // Play the greeting
-        await speakText(data.response);
+      // Speak the full response
+      if (cleanText) {
+        await speakText(cleanText);
       }
     } catch (error) {
       console.error('Failed to start lesson:', error);
@@ -80,7 +159,6 @@ useEffect(() => {
       mediaRecorder.onstop = () => {
         const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
         setAudioBlob(blob);
-        // Stop all tracks to release microphone
         stream.getTracks().forEach(track => track.stop());
       };
 
@@ -109,6 +187,7 @@ useEffect(() => {
 
   async function processAudio(blob: Blob) {
     setIsLoading(true);
+    setStreamingText('');
     
     try {
       // Step 1: Transcribe audio
@@ -134,8 +213,8 @@ useEffect(() => {
       const newMessages: Message[] = [...messages, { role: 'user', content: userText }];
       setMessages(newMessages);
       
-      // Step 2: Send to Claude
-      const chatResponse = await fetch('/api/chat', {
+      // Step 2: Stream from Claude
+      const response = await fetch('/api/chat-stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -143,48 +222,53 @@ useEffect(() => {
           conversationHistory: messages,
         }),
       });
+
+      if (!response.ok) {
+        throw new Error('Chat request failed');
+      }
+
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+      let fullText = '';
+
+      if (reader) {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          const chunk = decoder.decode(value);
+          const lines = chunk.split('\n');
+
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const data = JSON.parse(line.slice(6));
+                if (data.type === 'text') {
+                  fullText += data.content;
+                  setStreamingText(fullText);
+                }
+              } catch (e) {
+                // Ignore parse errors
+              }
+            }
+          }
+        }
+      }
+
+      // Clean up error logs from display
+      const cleanText = fullText.replace(/\[ERROR_LOG\][\s\S]*?\[\/ERROR_LOG\]/g, '').trim();
+      setMessages([...newMessages, { role: 'assistant', content: cleanText }]);
+      setStreamingText('');
       
-      const chatData = await chatResponse.json();
-      
-      if (chatData.response) {
-        setMessages([...newMessages, { role: 'assistant', content: chatData.response }]);
-        // Step 3: Speak the response
-        await speakText(chatData.response);
+      // Speak the full response
+      if (cleanText) {
+        await speakText(cleanText);
       }
     } catch (error) {
       console.error('Error processing audio:', error);
     }
     
     setIsLoading(false);
-  }
-
-  async function speakText(text: string) {
-    setIsPlaying(true);
-    try {
-      const response = await fetch('/api/speak', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text }),
-      });
-      
-      if (!response.ok) {
-        throw new Error('TTS request failed');
-      }
-      
-      const audioBlob = await response.blob();
-      const audioUrl = URL.createObjectURL(audioBlob);
-      const audio = new Audio(audioUrl);
-      
-      audio.onended = () => {
-        setIsPlaying(false);
-        URL.revokeObjectURL(audioUrl);
-      };
-      
-      await audio.play();
-    } catch (error) {
-      console.error('Error playing audio:', error);
-      setIsPlaying(false);
-    }
   }
 
   return (
@@ -204,7 +288,7 @@ useEffect(() => {
       }}>
         <h1 style={{ margin: 0, fontSize: '1.5rem' }}>FushaAI</h1>
         <p style={{ margin: '0.5rem 0 0', color: '#666', fontSize: '0.9rem' }}>
-          Lesson: Al-Fatiha
+          Lesson: Al-Fatiha - Asking for Help
         </p>
       </div>
 
@@ -217,7 +301,7 @@ useEffect(() => {
         backgroundColor: '#f9f9f9',
         borderRadius: '8px',
       }}>
-        {messages.length === 0 && isLoading && (
+        {messages.length === 0 && !streamingText && isLoading && (
           <p style={{ color: '#666', textAlign: 'center' }}>Starting lesson...</p>
         )}
         
@@ -251,14 +335,45 @@ useEffect(() => {
             </p>
           </div>
         ))}
+
+        {/* Streaming text display */}
+        {streamingText && (
+          <div
+            style={{
+              marginBottom: '1rem',
+              padding: '1rem',
+              borderRadius: '8px',
+              backgroundColor: '#fff',
+              border: '1px solid #eee',
+              marginRight: '2rem',
+            }}
+          >
+            <p style={{ 
+              margin: '0 0 0.5rem', 
+              fontSize: '0.75rem', 
+              color: '#666',
+              fontWeight: 'bold',
+            }}>
+              Ustadh
+            </p>
+            <p style={{ 
+              margin: 0,
+              lineHeight: 1.6,
+              whiteSpace: 'pre-wrap',
+            }}>
+              {streamingText.replace(/\[ERROR_LOG\][\s\S]*?\[\/ERROR_LOG\]/g, '')}
+              <span style={{ opacity: 0.5 }}>▊</span>
+            </p>
+          </div>
+        )}
         
-        {isLoading && messages.length > 0 && (
+        {isPlaying && !streamingText && (
           <div style={{ 
-            padding: '1rem',
+            padding: '0.5rem 1rem',
             color: '#666',
-            fontStyle: 'italic',
+            fontSize: '0.85rem',
           }}>
-            {isPlaying ? 'Speaking...' : 'Thinking...'}
+            🔊 Speaking...
           </div>
         )}
         
@@ -275,7 +390,7 @@ useEffect(() => {
       }}>
         <button
           onClick={isRecording ? stopRecording : startRecording}
-          disabled={isLoading}
+          disabled={isLoading || isPlaying}
           style={{
             padding: '1rem 2rem',
             fontSize: '1rem',
@@ -283,8 +398,8 @@ useEffect(() => {
             color: '#fff',
             border: 'none',
             borderRadius: '50px',
-            cursor: isLoading ? 'not-allowed' : 'pointer',
-            opacity: isLoading ? 0.5 : 1,
+            cursor: (isLoading || isPlaying) ? 'not-allowed' : 'pointer',
+            opacity: (isLoading || isPlaying) ? 0.5 : 1,
             display: 'flex',
             alignItems: 'center',
             gap: '0.5rem',
