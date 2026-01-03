@@ -1,200 +1,154 @@
 import { NextRequest } from 'next/server';
-import { chatStream } from '@/lib/anthropic';
-import { supabase } from '@/lib/supabase';
+import Anthropic from '@anthropic-ai/sdk';
+import { createClient } from '@supabase/supabase-js';
 
-// Fetch lesson details from database
-async function fetchLesson(lessonId: number) {
-  const { data: lesson, error } = await supabase
-    .from('lessons')
-    .select(`
-      id,
-      lesson_number,
-      title,
-      title_arabic,
-      objectives,
-      surahs (
-        name_english,
-        name_arabic
-      )
-    `)
-    .eq('id', lessonId)
-    .single();
+const anthropic = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY!,
+});
 
-  if (error) {
-    console.error('Error fetching lesson:', JSON.stringify(error, null, 2));
-    throw new Error('Failed to fetch lesson');
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
+
+// Fetch vocabulary for a surah from the database
+async function fetchSurahVocabulary(surahId: number): Promise<{vocabulary: string, answerKey: string}> {
+  // Get verse IDs for this surah
+  const { data: verses, error: versesError } = await supabase
+    .from('verses')
+    .select('id')
+    .eq('surah_id', surahId)
+    .order('verse_number', { ascending: true });
+
+  if (versesError) {
+    console.error('Error fetching verses:', versesError);
+    throw new Error('Failed to fetch verses from database');
   }
 
-  return lesson;
-}
-
-// Fetch target vocabulary for a lesson with full grammar details
-async function fetchLessonVocabulary(lessonId: number) {
-  const { data: words, error } = await supabase
-    .from('lesson_vocabulary')
-    .select(`
-      priority,
-      words (
-        id,
-        text_arabic,
-        transliteration,
-        translation_english,
-        part_of_speech,
-        verb_form,
-        person,
-        number,
-        gender,
-        grammatical_case,
-        verb_mood,
-        verb_tense,
-        verb_voice,
-        grammar_notes
-      )
-    `)
-    .eq('lesson_id', lessonId)
-    .order('priority', { ascending: true });
-
-  if (error) {
-    console.error('Error fetching vocabulary:', JSON.stringify(error, null, 2));
-    throw new Error('Failed to fetch vocabulary');
+  if (!verses || verses.length === 0) {
+    return { vocabulary: 'No verses found.', answerKey: '' };
   }
 
-  return words;
-}
+  const verseIds = verses.map(v => v.id);
 
-// Fetch scenarios for a lesson
-async function fetchScenarios(lessonId: number) {
-  const { data: scenarios, error } = await supabase
-    .from('scenarios')
-    .select('title, setup_english, setup_arabic, context')
-    .eq('lesson_id', lessonId);
+  // Get unique words for those verses
+  const { data: words, error: wordsError } = await supabase
+    .from('words')
+    .select('text_arabic, transliteration, translation_english, part_of_speech')
+    .in('verse_id', verseIds)
+    .order('verse_id', { ascending: true })
+    .order('word_position', { ascending: true });
 
-  if (error) {
-    console.error('Error fetching scenarios:', JSON.stringify(error, null, 2));
-    throw new Error('Failed to fetch scenarios');
+  if (wordsError) {
+    console.error('Error fetching words:', wordsError);
+    throw new Error('Failed to fetch words from database');
   }
 
-  return scenarios;
+  if (!words || words.length === 0) {
+    return { vocabulary: 'No vocabulary loaded.', answerKey: '' };
+  }
+
+  // Deduplicate by Arabic text
+  const seen = new Set<string>();
+  const uniqueWords = words.filter(word => {
+    if (seen.has(word.text_arabic)) return false;
+    seen.add(word.text_arabic);
+    return true;
+  });
+
+  // Build vocabulary list (no translations)
+  const vocabulary = uniqueWords
+    .map((word) => {
+      const transliteration = word.transliteration ? ` (${word.transliteration})` : '';
+      return `- ${word.text_arabic}${transliteration}`;
+    })
+    .join('\n');
+
+  // Build answer key (with translations)
+  const answerKey = uniqueWords
+    .map((word) => {
+      const translation = word.translation_english || 'no translation';
+      return `${word.text_arabic}: ${translation}`;
+    })
+    .join('\n');
+
+  return { vocabulary, answerKey };
 }
 
-// Format vocabulary for system prompt
-function formatVocabulary(words: any[]): string {
-  return words.map(item => {
-    const w = item.words;
-    let entry = `- ${w.text_arabic}`;
-    if (w.transliteration) entry += ` (${w.transliteration})`;
-    entry += ` - ${w.translation_english}`;
-    
-    const grammar: string[] = [];
-    if (w.part_of_speech) grammar.push(w.part_of_speech);
-    if (w.verb_form) grammar.push(`Form ${w.verb_form}`);
-    if (w.person) grammar.push(`${w.person} person`);
-    if (w.number) grammar.push(w.number);
-    
-    if (grammar.length > 0) {
-      entry += ` [${grammar.join(', ')}]`;
-    }
-    
-    return entry;
-  }).join('\n');
-}
+// Build system prompt with vocabulary from database
+function buildSystemPrompt(vocabulary: string, answerKey: string, surahName: string): string {
+  return `You are an Arabic teacher testing Quranic vocabulary.
 
-// Format scenarios for system prompt
-function formatScenarios(scenarios: any[]): string {
-  return scenarios.map((s, i) => {
-    return `${i + 1}. ${s.title}: ${s.setup_english}`;
-  }).join('\n');
-}
-
-// Build concise system prompt optimised for conversation
-function buildSystemPrompt(lesson: any, vocabulary: string, scenarios: string, nativeLanguage: string): string {
-  return `You are a friendly Arabic teacher having a spoken conversation. Be natural and conversational.
-
-## Lesson: ${lesson.title}
-Surah: ${lesson.surahs?.name_english || 'Al-Fatiha'}
-
-## Target Words
+WORDS TO TEST (Arabic and transliteration only - you don't know the meanings yet):
 ${vocabulary}
 
-## Scenarios
-${scenarios}
+ANSWER KEY (use this to check their answers, but NEVER reveal until they attempt):
+${answerKey}
 
-## Rules
-- Speak in Fusha, keep it VERY simple
-- Use ${nativeLanguage} when student struggles
-- BE CONCISE: 1-2 short sentences per response
-- One question at a time
-- Correct errors naturally, briefly
-- Sound like a real conversation, not a lecture
+RULES:
+1. Ask what a word means. Do NOT give the translation - you're testing them.
+2. Wait for their answer.
+3. If correct: "Good!" then test the next word.
+4. If wrong or they don't know: tell them the meaning, then move on.
+5. One word at a time. Maximum 2 sentences per response.
+6. No emojis. No markdown.
 
-## Error Tracking (hidden from student)
-If student makes an error, append:
-[ERROR_LOG]
-type: grammar|vocabulary|gender|conjugation
-student_said: "x"
-correction: "y"
-context: "z"
-[/ERROR_LOG]
+FIRST MESSAGE FORMAT:
+"Asalaam alaikum! What does [arabicword] ([transliteration]) mean?"
 
-Start with a brief Arabic greeting and one simple question about the scenario.`;
+NEVER say "which means" or "it means" in your first message or when asking a question.`;
 }
 
 export async function POST(request: NextRequest) {
   try {
-    const { 
-      userMessage, 
-      conversationHistory, 
-      lessonId = 1,
-      nativeLanguage = 'English' 
-    } = await request.json();
+    const { messages, surahId = 1 } = await request.json();
 
-    if (!userMessage) {
-      return new Response(
-        JSON.stringify({ error: 'No message provided' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
-      );
-    }
+    // Fetch vocabulary from database
+    const { vocabulary, answerKey } = await fetchSurahVocabulary(surahId);
+    
+    // Fetch surah name from database
+    const { data: surah } = await supabase
+      .from('surahs')
+      .select('name_english')
+      .eq('id', surahId)
+      .single();
+    
+    const surahName = surah?.name_english || `Surah ${surahId}`;
+    
+    // Build system prompt with fetched vocabulary
+    const systemPrompt = buildSystemPrompt(vocabulary, answerKey, surahName);
 
-    // Fetch lesson data from database
-    const [lesson, vocabularyData, scenarios] = await Promise.all([
-      fetchLesson(lessonId),
-      fetchLessonVocabulary(lessonId),
-      fetchScenarios(lessonId),
-    ]);
+    // Build message array for Claude
+    const claudeMessages = messages.map((msg: { role: string; content: string }) => ({
+      role: msg.role as 'user' | 'assistant',
+      content: msg.content,
+    }));
 
-    // Format data for prompt
-    const vocabulary = formatVocabulary(vocabularyData);
-    const scenariosText = formatScenarios(scenarios);
-
-    // Build the system prompt
-    const systemPrompt = buildSystemPrompt(lesson, vocabulary, scenariosText, nativeLanguage);
-
-    // Format conversation history for Claude
-    const messages = [
-      ...conversationHistory.map((msg: { role: string; content: string }) => ({
-        role: msg.role as 'user' | 'assistant',
-        content: msg.content,
-      })),
-      { role: 'user' as const, content: userMessage },
-    ];
-
-    // Create a readable stream for the response
+    // Create streaming response
     const encoder = new TextEncoder();
+    
     const stream = new ReadableStream({
       async start(controller) {
         try {
-          for await (const chunk of chatStream(systemPrompt, messages)) {
-            if (chunk.type === 'text') {
-              // Send text chunk
-              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'text', content: chunk.content })}\n\n`));
-            } else if (chunk.type === 'done') {
-              // Send done signal with usage
-              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'done', usage: chunk.usage })}\n\n`));
+          const response = await anthropic.messages.stream({
+            model: 'claude-sonnet-4-20250514',
+            max_tokens: 512,
+            system: systemPrompt,
+            messages: claudeMessages,
+          });
+
+          for await (const event of response) {
+            if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+              const data = JSON.stringify({ text: event.delta.text });
+              controller.enqueue(encoder.encode(`data: ${data}\n\n`));
             }
           }
+
+          controller.enqueue(encoder.encode('data: [DONE]\n\n'));
         } catch (error) {
           console.error('Stream error:', error);
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'error', message: 'Stream failed' })}\n\n`));
+          const errorData = JSON.stringify({ error: 'Stream failed' });
+          controller.enqueue(encoder.encode(`data: ${errorData}\n\n`));
         }
         controller.close();
       },

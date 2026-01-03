@@ -1,49 +1,13 @@
 # FushaAI
 
-بسم الله الرحمان الرحيم
+A personal Quran Arabic tutor. Learn Quranic Arabic through conversation, not flashcards.
 
-Learn Quranic Arabic through conversing with a personal Quran Arabic tutor.
+## Current State
 
-## What it does
-
-- You work through ayaat, reciting and translating aloud
-- FushaAI corrects naturally, like a human tutor would
-- It drills into your specific gaps (vocabulary,grammar, morphology)
-- Explains in your native language
-- Assigns homework based on your mistakes
-- Tracks your progress through the Quran
-
-## Project Structure
-
-```
-fusha-ai/
-├── app/                    # Next.js App Router - pages and API routes
-│   ├── layout.tsx          # Root layout - wraps every page
-│   ├── page.tsx            # Home page
-│   ├── lesson/
-│   │   └── page.tsx        # The lesson interface
-│   └── api/                # Backend API routes (server-side, keys stay secret)
-│       ├── transcribe/
-│       │   └── route.ts    # Audio → Whisper → text
-│       ├── chat/
-│       │   └── route.ts    # Text → Claude → response
-│       └── speak/
-│           └── route.ts    # Text → TTS → audio
-├── components/             # Reusable UI components
-├── lib/                    # Shared utilities
-│   ├── supabase.ts         # Supabase client setup
-│   ├── anthropic.ts        # Claude client setup
-│   └── openai.ts           # Whisper/TTS client setup
-├── types/                  # TypeScript type definitions
-│   └── index.ts
-├── docs/                   # Documentation
-│   └── TEACHING_METHODOLOGY.md
-├── .env.example            # Template for environment variables
-├── .env.local              # Your actual keys (git ignored)
-├── package.json
-├── tsconfig.json
-└── README.md
-```
+- **Text chat**: Active ✅
+- **Whiteboard**: Disabled (commented out)
+- **Voice input (Whisper)**: Disabled (commented out)
+- **Voice output (ElevenLabs)**: Disabled (commented out)
 
 ## Tech Stack
 
@@ -51,64 +15,178 @@ fusha-ai/
 |-------|------|---------|
 | Conversation | Claude API (Anthropic) | The AI teacher |
 | Speech-to-text | Whisper API (OpenAI) | Transcribes your Arabic speech |
-| Text-to-speech | OpenAI TTS | FushaAI's voice |
+| Text-to-speech | ElevenLabs | Ustadh's voice |
 | Frontend | Next.js | React framework with API routes |
-| Database | Supabase | Auth, vocabulary, progress, mistakes |
-| Hosting | Vercel | Deployment |
+| Database | Supabase | Auth, vocabulary, progress |
 
 ## Setup
 
-### 1. Clone and install
-
 ```bash
-git clone <your-repo-url>
-cd fusha-ai
 npm install
-```
-
-### 2. Create Supabase project
-
-1. Go to [supabase.com](https://supabase.com) and create a new project
-2. Go to SQL Editor and run the schema from `docs/schema.sql`
-3. Get your project URL and anon key from Settings → API
-
-### 3. Get API keys
-
-- **Anthropic**: [console.anthropic.com](https://console.anthropic.com) → API Keys
-- **OpenAI**: [platform.openai.com](https://platform.openai.com) → API Keys
-
-### 4. Configure environment
-
-```bash
 cp .env.example .env.local
-```
-
-Edit `.env.local` with your keys.
-
-### 5. Run locally
-
-```bash
+# Add your API keys to .env.local
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000)
+Open http://localhost:3000/lesson
 
-## Dependencies Explained
+---
 
-### Production
+## Re-enabling Whiteboard Features
 
-- **next** - React framework. Handles routing, server-side rendering, API routes.
-- **react / react-dom** - UI library. Next.js is built on React.
-- **@anthropic-ai/sdk** - Official Anthropic SDK. Used to call Claude for conversation.
-- **openai** - Official OpenAI SDK. Used for Whisper (speech-to-text) and TTS (text-to-speech).
-- **@supabase/supabase-js** - Supabase client. Database queries, auth, realtime subscriptions.
+Whiteboard is commented out in `app/lesson/page.tsx`. To re-enable:
 
-### Development
+### Step-by-step:
 
-- **typescript** - Type safety. Catches errors before runtime.`
-- **@types/*** - Type definitions for React and Node.
-- **eslint / eslint-config-next** - Code linting. Catches common mistakes.
+#### 1. Uncomment the WhiteboardContent interface (near top of file)
 
-## Licence`
+Find and remove `/*` and `*/` around:
+```typescript
+interface WhiteboardContent {
+  word?: string;
+  transliteration?: string;
+  // ... etc
+}
+```
 
-This project is a labour of love to help people understand the Quran.
+#### 2. Uncomment whiteboard state (around line 35)
+
+Find and uncomment:
+```typescript
+const [whiteboard, setWhiteboard] = useState<WhiteboardContent | null>(null);
+```
+
+#### 3. Uncomment parseWhiteboardContent function (around line 55)
+
+Remove `/*` and `*/` around the entire `parseWhiteboardContent` function.
+
+#### 4. Uncomment whiteboard parsing in streamChat (around line 110)
+
+Find and uncomment:
+```typescript
+const { whiteboard: wb, speech } = parseWhiteboardContent(fullText);
+if (wb && Object.keys(wb).length > 0) {
+  setWhiteboard(wb);
+}
+setStreamingText(speech);
+```
+
+And:
+```typescript
+const { whiteboard: finalWb, speech: finalSpeech } = parseWhiteboardContent(fullText);
+if (finalWb) setWhiteboard(finalWb);
+```
+
+#### 5. Uncomment renderWhiteboard function (around line 180)
+
+Remove `/*` and `*/` around the entire `renderWhiteboard` function.
+
+#### 6. Uncomment whiteboard render call in JSX (around line 280)
+
+Find and uncomment:
+```typescript
+{renderWhiteboard()}
+```
+
+---
+
+## Re-enabling Voice Features
+
+Voice features are also commented out. To re-enable:
+
+### Step-by-step:
+
+#### 1. Uncomment state variables (around line 40)
+
+Find and uncomment:
+```typescript
+const [isRecording, setIsRecording] = useState(false);
+const [isPlaying, setIsPlaying] = useState(false);
+const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+const chunksRef = useRef<Blob[]>([]);
+const audioRef = useRef<HTMLAudioElement | null>(null);
+```
+
+#### 2. Uncomment voice functions (around line 150)
+
+Find the large commented block containing:
+- `startRecording()`
+- `stopRecording()`
+- `processAudio()`
+- `playAudio()`
+
+Remove the `/*` at the start and `*/` at the end.
+
+#### 3. Uncomment the speaking indicator (around line 320)
+
+Find and uncomment:
+```typescript
+{isPlaying && !streamingText && (
+  <div style={{ ... }}>
+    🔊 Speaking...
+  </div>
+)}
+```
+
+#### 4. Uncomment the recording button (at the bottom)
+
+Find and uncomment the entire recording controls div.
+
+### API Routes Required for Voice
+
+Make sure these exist:
+- `app/api/transcribe/route.ts` - Whisper integration
+- `app/api/speak-stream/route.ts` - ElevenLabs integration
+
+### Environment Variables for Voice
+
+```env
+OPENAI_API_KEY=sk-...        # For Whisper transcription
+ELEVENLABS_API_KEY=...       # For text-to-speech
+```
+
+---
+
+## Project Structure
+
+```
+fusha-ai/
+├── app/
+│   ├── layout.tsx
+│   ├── page.tsx                    # Home page
+│   ├── lesson/
+│   │   └── page.tsx                # Main lesson interface
+│   └── api/
+│       ├── chat-stream/
+│       │   └── route.ts            # Claude streaming endpoint
+│       ├── transcribe/
+│       │   └── route.ts            # Whisper (voice → text) [dormant]
+│       └── speak-stream/
+│           └── route.ts            # ElevenLabs (text → voice) [dormant]
+├── lib/
+│   ├── anthropic.ts
+│   └── supabase.ts
+├── .env.local                      # Your API keys (git ignored)
+└── README.md
+```
+
+---
+
+## Whiteboard Format (for reference)
+
+When whiteboard is enabled, Claude outputs structured content:
+
+```
+[WHITEBOARD]
+word: نَسْتَعِينُ
+transliteration: nasta'een
+meaning: we seek help
+type: vocabulary
+grammar: Form X (استفعل)
+root: ع-و-ن
+[/WHITEBOARD]
+
+Now let's practice using this word...
+```
+
+The whiteboard appears instantly while audio (when enabled) loads in the background.
