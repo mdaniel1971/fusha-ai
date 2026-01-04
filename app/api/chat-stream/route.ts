@@ -11,102 +11,169 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
-// Fetch vocabulary for a surah from the database
-async function fetchSurahVocabulary(surahId: number): Promise<{vocabulary: string, answerKey: string}> {
-  // Get verse IDs for this surah
+// Fetch verses and words for a surah
+async function fetchSurahData(surahId: number) {
   const { data: verses, error: versesError } = await supabase
     .from('verses')
-    .select('id')
+    .select('id, verse_number, text_arabic')
     .eq('surah_id', surahId)
     .order('verse_number', { ascending: true });
 
-  if (versesError) {
-    console.error('Error fetching verses:', versesError);
-    throw new Error('Failed to fetch verses from database');
-  }
-
-  if (!verses || verses.length === 0) {
-    return { vocabulary: 'No verses found.', answerKey: '' };
+  if (versesError || !verses?.length) {
+    return { verses: [], words: [] };
   }
 
   const verseIds = verses.map(v => v.id);
-
-  // Get unique words for those verses
-  const { data: words, error: wordsError } = await supabase
+  const { data: words } = await supabase
     .from('words')
-    .select('text_arabic, transliteration, translation_english, part_of_speech')
+    .select('verse_id, word_position, text_arabic, transliteration, translation_english, part_of_speech')
     .in('verse_id', verseIds)
     .order('verse_id', { ascending: true })
     .order('word_position', { ascending: true });
 
-  if (wordsError) {
-    console.error('Error fetching words:', wordsError);
-    throw new Error('Failed to fetch words from database');
-  }
-
-  if (!words || words.length === 0) {
-    return { vocabulary: 'No vocabulary loaded.', answerKey: '' };
-  }
-
-  // Deduplicate by Arabic text
-  const seen = new Set<string>();
-  const uniqueWords = words.filter(word => {
-    if (seen.has(word.text_arabic)) return false;
-    seen.add(word.text_arabic);
-    return true;
-  });
-
-  // Build vocabulary list (no translations)
-  const vocabulary = uniqueWords
-    .map((word) => {
-      const transliteration = word.transliteration ? ` (${word.transliteration})` : '';
-      return `- ${word.text_arabic}${transliteration}`;
-    })
-    .join('\n');
-
-  // Build answer key (with translations)
-  const answerKey = uniqueWords
-    .map((word) => {
-      const translation = word.translation_english || 'no translation';
-      return `${word.text_arabic}: ${translation}`;
-    })
-    .join('\n');
-
-  return { vocabulary, answerKey };
+  return { verses, words: words || [] };
 }
 
-// Build system prompt with vocabulary from database
-function buildSystemPrompt(vocabulary: string, answerKey: string, surahName: string): string {
-  return `You are an Arabic teacher testing Quranic vocabulary.
+// ===========================================
+// META PROMPT - applies to ALL levels
+// ===========================================
+const META_PROMPT = `You are an Arabic teacher helping students learn Quranic vocabulary.
 
-WORDS TO TEST (Arabic and transliteration only - you don't know the meanings yet):
-${vocabulary}
+STYLE:
+- Warm, encouraging, patient
+- Concise (max 2-3 sentences per response)
+- No emojis
+- No markdown (no bold, italics, bullets)
+- No preamble like "Today we'll..." - just start the lesson
 
-ANSWER KEY (use this to check their answers, but NEVER reveal until they attempt):
+KEEP IT REAL:
+- Only create scenarios where the vocabulary would naturally be used
+- بِسْمِ اللَّهِ is said before eating, starting a task, or beginning something - NOT when introducing yourself
+- الحمد لله is for expressing gratitude or answering "how are you" - NOT for random situations
+- If a word doesn't fit a scenario naturally, pick a different word or scenario
+- Think: "Would an Arab actually say this in this situation?"
+
+ARABIC RECOGNITION - CRITICAL:
+- Accept words with attached prefixes: و (and), ف (so), ب (with), ل (for), ك (like)
+- والحمدلله = و + الحمدلله (CORRECT - do not say "al" is missing)
+- بسم = ب + اسم (CORRECT)
+- Accept both connected (الحمدلله) and spaced (الحمد لله) writing
+- Do NOT incorrectly "correct" valid Arabic
+- Focus on meaning and usage, not spelling variations
+
+FIRST MESSAGE:
+- Start with "Asalaam alaikum!" then immediately begin the task for your level`;
+
+// ===========================================
+// LEVEL-SPECIFIC PROMPTS
+// ===========================================
+
+function buildLevel1Prompt(verses: any[], words: any[], surahName: string): string {
+  const verseList = verses.map(v => `Verse ${v.verse_number}: ${v.text_arabic}`).join('\n');
+  
+  let answerKey = '';
+  for (const verse of verses) {
+    const verseWords = words.filter((w: any) => w.verse_id === verse.id);
+    const translations = verseWords.map((w: any) => w.translation_english || '?').join(' ');
+    answerKey += `Verse ${verse.verse_number}: ${translations}\n`;
+  }
+
+  return `
+LEVEL 1: VERSE TRANSLATIONS
+Surah: ${surahName}
+
+VERSES:
+${verseList}
+
+ANSWER KEY (hidden until they attempt):
 ${answerKey}
 
-RULES:
-1. Ask what a word means. Do NOT give the translation - you're testing them.
-2. Wait for their answer.
-3. If correct: "Good!" then test the next word.
-4. If wrong or they don't know: tell them the meaning, then move on.
-5. One word at a time. Maximum 2 sentences per response.
-6. No emojis. No markdown.
+TASK: Test their verse comprehension
+- Show one verse in Arabic, ask "What does this mean?"
+- Do NOT translate it yourself - wait for their answer
+- If correct: "Good!" then next verse
+- If wrong: give the translation, then next verse
 
-FIRST MESSAGE FORMAT:
-"Asalaam alaikum! What does [arabicword] ([transliteration]) mean?"
-
-NEVER say "which means" or "it means" in your first message or when asking a question.`;
+FIRST MESSAGE EXAMPLE:
+"Asalaam alaikum! What does this verse mean?
+بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ"`;
 }
+
+function buildLevel2Prompt(verses: any[], words: any[], surahName: string): string {
+  const vocabList = [...new Set(words.map((w: any) => 
+    `${w.text_arabic} (${w.transliteration || '?'}) - ${w.translation_english || '?'}`
+  ))].slice(0, 15).join('\n');
+
+  return `
+LEVEL 2: BASIC SCENARIOS
+Surah: ${surahName}
+
+VOCABULARY:
+${vocabList}
+
+TASK: Teach vocabulary through simple everyday scenarios
+- Set up a scenario (greeting someone, at a shop, asking directions)
+- Ask them to respond using vocabulary from the list
+- They should use 2-3 word phrases
+- Teach basic grammar as needed: "al-", possessives, "this is..."
+
+FIRST MESSAGE EXAMPLE:
+"Asalaam alaikum! Imagine a friend asks how you are. How would you reply using الحمد?"`;
+}
+
+function buildLevel3Prompt(verses: any[], words: any[], surahName: string): string {
+  const vocabList = [...new Set(words.map((w: any) => 
+    `${w.text_arabic} (${w.transliteration || '?'}) - ${w.translation_english || '?'} [${w.part_of_speech || '?'}]`
+  ))].slice(0, 20).join('\n');
+
+  return `
+LEVEL 3: INTERMEDIATE SCENARIOS
+Surah: ${surahName}
+
+VOCABULARY:
+${vocabList}
+
+TASK: Teach through more complex everyday scenarios
+- Set up scenarios: describing your day, explaining plans, expressing beliefs
+- Ask them to build 4-6 word sentences using the vocabulary
+- Teach grammar: verb conjugations, noun-adjective agreement, prepositions
+
+FIRST MESSAGE EXAMPLE:
+"Asalaam alaikum! Describe how you felt this morning using رَبِّ in a sentence."`;
+}
+
+function buildLevel4Prompt(verses: any[], words: any[], surahName: string): string {
+  const vocabList = [...new Set(words.map((w: any) => 
+    `${w.text_arabic} (${w.transliteration || '?'}) - ${w.translation_english || '?'} [${w.part_of_speech || '?'}]`
+  ))].join('\n');
+
+  return `
+LEVEL 4: ADVANCED SCENARIOS
+Surah: ${surahName}
+
+VOCABULARY:
+${vocabList}
+
+TASK: Challenge with sophisticated scenarios
+- Set up complex situations: giving advice, formal speech, explaining concepts
+- Ask for multi-clause sentences, conditionals
+- Teach advanced grammar: verb forms (I-X), nominal vs verbal sentences, root patterns
+- Discuss nuance and eloquent expression
+
+FIRST MESSAGE EXAMPLE:
+"Asalaam alaikum! A friend needs guidance. Advise them to seek help using نَسْتَعِينُ in a conditional."`;
+}
+
+// ===========================================
+// MAIN HANDLER
+// ===========================================
 
 export async function POST(request: NextRequest) {
   try {
-    const { messages, surahId = 1 } = await request.json();
+    const { messages, surahId = 1, level = 1 } = await request.json();
 
-    // Fetch vocabulary from database
-    const { vocabulary, answerKey } = await fetchSurahVocabulary(surahId);
+    const { verses, words } = await fetchSurahData(surahId);
     
-    // Fetch surah name from database
     const { data: surah } = await supabase
       .from('surahs')
       .select('name_english')
@@ -115,16 +182,33 @@ export async function POST(request: NextRequest) {
     
     const surahName = surah?.name_english || `Surah ${surahId}`;
     
-    // Build system prompt with fetched vocabulary
-    const systemPrompt = buildSystemPrompt(vocabulary, answerKey, surahName);
+    // Build level-specific prompt
+    let levelPrompt: string;
+    switch (level) {
+      case 1:
+        levelPrompt = buildLevel1Prompt(verses, words, surahName);
+        break;
+      case 2:
+        levelPrompt = buildLevel2Prompt(verses, words, surahName);
+        break;
+      case 3:
+        levelPrompt = buildLevel3Prompt(verses, words, surahName);
+        break;
+      case 4:
+        levelPrompt = buildLevel4Prompt(verses, words, surahName);
+        break;
+      default:
+        levelPrompt = buildLevel1Prompt(verses, words, surahName);
+    }
 
-    // Build message array for Claude
+    // Combine meta + level prompt
+    const systemPrompt = META_PROMPT + '\n' + levelPrompt;
+
     const claudeMessages = messages.map((msg: { role: string; content: string }) => ({
       role: msg.role as 'user' | 'assistant',
       content: msg.content,
     }));
 
-    // Create streaming response
     const encoder = new TextEncoder();
     
     const stream = new ReadableStream({
@@ -147,8 +231,7 @@ export async function POST(request: NextRequest) {
           controller.enqueue(encoder.encode('data: [DONE]\n\n'));
         } catch (error) {
           console.error('Stream error:', error);
-          const errorData = JSON.stringify({ error: 'Stream failed' });
-          controller.enqueue(encoder.encode(`data: ${errorData}\n\n`));
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: 'Stream failed' })}\n\n`));
         }
         controller.close();
       },

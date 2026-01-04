@@ -20,34 +20,6 @@ interface Message {
   content: string;
 }
 
-// Format text to render Arabic in larger Amiri font
-function formatWithArabic(text: string): React.ReactNode {
-  // Regex to match Arabic text (including diacritics)
-  const arabicRegex = /([\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]+)/g;
-  
-  const parts = text.split(arabicRegex);
-  
-  return parts.map((part, index) => {
-    if (arabicRegex.test(part)) {
-      // Reset regex lastIndex after test
-      arabicRegex.lastIndex = 0;
-      return (
-        <span 
-          key={index} 
-          style={{ 
-            fontFamily: "'Amiri', 'Traditional Arabic', serif",
-            fontSize: '1.4em',
-            lineHeight: 1.8,
-          }}
-        >
-          {part}
-        </span>
-      );
-    }
-    return part;
-  });
-}
-
 // ============================================================
 // WHITEBOARD INTERFACE - COMMENTED OUT
 // ============================================================
@@ -68,21 +40,56 @@ interface WhiteboardContent {
 */
 // ============================================================
 
+// Format text to render Arabic in larger Amiri font, English in Arial
+function formatWithArabic(text: string): React.ReactNode {
+  const arabicRegex = /([\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]+)/g;
+  
+  const parts = text.split(arabicRegex);
+  
+  return parts.map((part, index) => {
+    if (arabicRegex.test(part)) {
+      arabicRegex.lastIndex = 0;
+      return (
+        <span 
+          key={index} 
+          style={{ 
+            fontFamily: "'Amiri', 'Traditional Arabic', serif",
+            fontSize: '1.8em',
+            lineHeight: 2,
+          }}
+        >
+          {part}
+        </span>
+      );
+    }
+    return (
+      <span 
+        key={index}
+        style={{
+          fontFamily: "Arial, sans-serif",
+        }}
+      >
+        {part}
+      </span>
+    );
+  });
+}
+
 export default function LessonPage() {
-  // Conversation state
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [streamingText, setStreamingText] = useState('');
-  
+  const [selectedLevel, setSelectedLevel] = useState<number | null>(null);
+  const [lessonStarted, setLessonStarted] = useState(false);
+  const [inputText, setInputText] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
   // ============================================================
   // WHITEBOARD STATE - COMMENTED OUT
   // ============================================================
   // const [whiteboard, setWhiteboard] = useState<WhiteboardContent | null>(null);
   // ============================================================
-  
-  // Text input state (active)
-  const [inputText, setInputText] = useState('');
-  
+
   // ============================================================
   // VOICE STATE - COMMENTED OUT
   // ============================================================
@@ -95,25 +102,31 @@ export default function LessonPage() {
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll when messages update
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, streamingText]);
 
-  // Start lesson on mount
-  useEffect(() => {
-    startLesson();
-  }, []);
+  const levels = [
+    { id: 1, name: 'Level 1: Translations', description: 'Translate verses from Arabic to English' },
+    { id: 2, name: 'Level 2: Basic', description: 'Simple sentences and basic grammar in everyday scenarios' },
+    { id: 3, name: 'Level 3: Intermediate', description: 'More complex sentences and grammar in scenarios' },
+    { id: 4, name: 'Level 4: Advanced', description: 'Advanced grammar and expression in scenarios' },
+  ];
 
-  const startLesson = async () => {
+  const startLesson = async (level: number) => {
+    setSelectedLevel(level);
+    setLessonStarted(true);
     setIsLoading(true);
+    setError(null);
+    
     try {
       await streamChat([{ 
         role: 'user', 
-        content: 'Start a new lesson. Greet me briefly and introduce today\'s vocabulary word.' 
-      }], true);
-    } catch (error) {
-      console.error('Failed to start lesson:', error);
+        content: `Start a level ${level} lesson.` 
+      }], true, level);
+    } catch (err) {
+      console.error('Failed to start lesson:', err);
+      setError('Failed to start lesson. Check console for details.');
     }
     setIsLoading(false);
   };
@@ -132,7 +145,6 @@ export default function LessonPage() {
     const whiteboardText = whiteboardMatch[1];
     const speech = text.replace(/\[WHITEBOARD\][\s\S]*?\[\/WHITEBOARD\]/, '').trim();
     
-    // Parse the whiteboard content
     const content: WhiteboardContent = {};
     const lines = whiteboardText.trim().split('\n');
     
@@ -160,75 +172,94 @@ export default function LessonPage() {
   */
   // ============================================================
 
-  const streamChat = async (chatMessages: Message[], isSystemMessage = false) => {
+  const streamChat = async (chatMessages: Message[], isSystemMessage = false, level?: number) => {
     setStreamingText('');
+    setError(null);
     
-    const response = await fetch('/api/chat-stream', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: chatMessages }),
-    });
+    try {
+      const response = await fetch('/api/chat-stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          messages: chatMessages,
+          level: level || selectedLevel || 1,
+        }),
+      });
 
-    if (!response.ok) throw new Error('Chat stream failed');
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('API Error:', response.status, errorText);
+        throw new Error(`API error: ${response.status}`);
+      }
 
-    const reader = response.body?.getReader();
-    if (!reader) throw new Error('No reader');
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('No reader available');
 
-    const decoder = new TextDecoder();
-    let fullText = '';
+      const decoder = new TextDecoder();
+      let fullText = '';
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      
-      const chunk = decoder.decode(value);
-      const lines = chunk.split('\n');
-      
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          const data = line.slice(6);
-          if (data === '[DONE]') continue;
-          
-          try {
-            const parsed = JSON.parse(data);
-            if (parsed.text) {
-              fullText += parsed.text;
-              setStreamingText(fullText);
-              
-              // ============================================================
-              // WHITEBOARD PARSING IN STREAM - COMMENTED OUT
-              // ============================================================
-              // const { whiteboard: wb, speech } = parseWhiteboardContent(fullText);
-              // if (wb && Object.keys(wb).length > 0) {
-              //   setWhiteboard(wb);
-              // }
-              // setStreamingText(speech);
-              // ============================================================
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        
+        const chunk = decoder.decode(value);
+        const lines = chunk.split('\n');
+        
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const data = line.slice(6);
+            if (data === '[DONE]') continue;
+            
+            try {
+              const parsed = JSON.parse(data);
+              if (parsed.text) {
+                fullText += parsed.text;
+                setStreamingText(fullText);
+                
+                // ============================================================
+                // WHITEBOARD PARSING IN STREAM - COMMENTED OUT
+                // ============================================================
+                // const { whiteboard: wb, speech } = parseWhiteboardContent(fullText);
+                // if (wb && Object.keys(wb).length > 0) {
+                //   setWhiteboard(wb);
+                // }
+                // setStreamingText(speech);
+                // ============================================================
+              }
+              if (parsed.error) {
+                console.error('Stream error:', parsed.error);
+                setError(parsed.error);
+              }
+            } catch {
+              // Partial JSON, ignore
             }
-          } catch {
-            // Not JSON, might be partial
           }
         }
       }
-    }
 
-    // ============================================================
-    // WHITEBOARD FINAL PARSE - COMMENTED OUT
-    // ============================================================
-    // const { whiteboard: finalWb, speech: finalSpeech } = parseWhiteboardContent(fullText);
-    // if (finalWb) setWhiteboard(finalWb);
-    // ============================================================
-    
-    // Add to messages
-    if (!isSystemMessage) {
-      setMessages(prev => [...prev, { role: 'assistant', content: fullText }]);
-    } else {
-      setMessages([{ role: 'assistant', content: fullText }]);
+      // ============================================================
+      // WHITEBOARD FINAL PARSE - COMMENTED OUT
+      // ============================================================
+      // const { whiteboard: finalWb, speech: finalSpeech } = parseWhiteboardContent(fullText);
+      // if (finalWb) setWhiteboard(finalWb);
+      // ============================================================
+
+      if (fullText) {
+        if (isSystemMessage) {
+          setMessages([{ role: 'assistant', content: fullText }]);
+        } else {
+          setMessages(prev => [...prev, { role: 'assistant', content: fullText }]);
+        }
+      }
+      
+      setStreamingText('');
+      return fullText;
+      
+    } catch (err) {
+      console.error('streamChat error:', err);
+      setError(err instanceof Error ? err.message : 'Unknown error');
+      throw err;
     }
-    
-    setStreamingText('');
-    
-    return fullText;
   };
 
   // ============================================================
@@ -272,7 +303,6 @@ export default function LessonPage() {
     setIsLoading(true);
     
     try {
-      // Transcribe
       const formData = new FormData();
       formData.append('audio', blob, 'audio.webm');
       
@@ -285,15 +315,12 @@ export default function LessonPage() {
       
       const { text: userText } = await transcribeRes.json();
       
-      // Add user message
       const userMessage: Message = { role: 'user', content: userText };
       setMessages(prev => [...prev, userMessage]);
       
-      // Get AI response
       const allMessages = [...messages, userMessage];
       const speech = await streamChat(allMessages);
       
-      // Play audio response
       await playAudio(speech);
       
     } catch (error) {
@@ -335,11 +362,11 @@ export default function LessonPage() {
   */
   // ============================================================
 
-  // Text input handler (active while voice is disabled)
   const handleSendText = async () => {
     if (!inputText.trim() || isLoading) return;
     
     setIsLoading(true);
+    setError(null);
     const userMessage: Message = { role: 'user', content: inputText.trim() };
     setMessages(prev => [...prev, userMessage]);
     setInputText('');
@@ -347,14 +374,14 @@ export default function LessonPage() {
     try {
       const allMessages = [...messages, userMessage];
       await streamChat(allMessages);
-    } catch (error) {
-      console.error('Failed to send message:', error);
+    } catch (err) {
+      console.error('Failed to send message:', err);
     }
     
     setIsLoading(false);
   };
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
+  const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSendText();
@@ -504,190 +531,266 @@ export default function LessonPage() {
         display: 'flex',
         flexDirection: 'column',
       }}>
-      <h1 style={{ 
-        textAlign: 'center', 
-        marginBottom: '1rem',
-        fontSize: '1.5rem',
-        color: '#1a1a1a',
-      }}>
-        FushaAI Lesson
-      </h1>
+        <h1 style={{ 
+          textAlign: 'center', 
+          marginBottom: '1rem',
+          fontSize: '1.5rem',
+          color: '#1a1a1a',
+          fontFamily: 'Arial, sans-serif',
+        }}>
+          FushaAI Lesson
+        </h1>
 
-      {/* ============================================================
-          WHITEBOARD AREA - COMMENTED OUT
-          ============================================================
-      {renderWhiteboard()}
-      ============================================================ */}
-
-      {/* Chat messages */}
-      <div style={{
-        flex: 1,
-        overflowY: 'auto',
-        padding: '1rem',
-        backgroundColor: '#f8f9fa',
-        borderRadius: '8px',
-        marginBottom: '1rem',
-      }}>
-        {messages.map((message, index) => (
-          <div
-            key={index}
-            style={{
-              marginBottom: '1rem',
-              padding: '1rem',
-              borderRadius: '8px',
-              backgroundColor: message.role === 'user' ? '#e3f2fd' : '#fff',
-              border: message.role === 'user' ? 'none' : '1px solid #eee',
-              marginLeft: message.role === 'user' ? '2rem' : '0',
-              marginRight: message.role === 'user' ? '0' : '2rem',
-            }}
-          >
-            <p style={{ 
-              margin: '0 0 0.5rem', 
-              fontSize: '0.75rem', 
-              color: '#666',
-              fontWeight: 'bold',
-            }}>
-              {message.role === 'user' ? 'You' : 'Teacher'}
-            </p>
-            <p style={{ 
-              margin: 0,
-              lineHeight: 1.6,
-              whiteSpace: 'pre-wrap',
-            }}>
-              {formatWithArabic(message.content)}
-            </p>
-          </div>
-        ))}
-
-        {/* Streaming text display */}
-        {streamingText && (
-          <div
-            style={{
-              marginBottom: '1rem',
-              padding: '1rem',
-              borderRadius: '8px',
-              backgroundColor: '#fff',
-              border: '1px solid #eee',
-              marginRight: '2rem',
-            }}
-          >
-            <p style={{ 
-              margin: '0 0 0.5rem', 
-              fontSize: '0.75rem', 
-              color: '#666',
-              fontWeight: 'bold',
-            }}>
-              Teacher
-            </p>
-            <p style={{ 
-              margin: 0,
-              lineHeight: 1.6,
-              whiteSpace: 'pre-wrap',
-            }}>
-              {formatWithArabic(streamingText)}
-              <span style={{ opacity: 0.5 }}>▊</span>
-            </p>
-          </div>
-        )}
-
-        {/* ============================================================
-            VOICE PLAYING INDICATOR - COMMENTED OUT
-            ============================================================
-        {isPlaying && !streamingText && (
-          <div style={{ 
-            padding: '0.5rem 1rem',
-            color: '#666',
-            fontSize: '0.85rem',
+        {/* Error display */}
+        {error && (
+          <div style={{
+            padding: '1rem',
+            backgroundColor: '#fee2e2',
+            border: '1px solid #ef4444',
+            borderRadius: '8px',
+            marginBottom: '1rem',
+            color: '#dc2626',
+            fontFamily: 'Arial, sans-serif',
           }}>
-            🔊 Speaking...
+            Error: {error}
           </div>
         )}
-        ============================================================ */}
-        
-        <div ref={messagesEndRef} />
-      </div>
 
-      {/* Text input controls (active) */}
-      <div style={{ 
-        padding: '1rem',
-        borderTop: '1px solid #eee',
-        display: 'flex',
-        gap: '0.5rem',
-      }}>
-        <input
-          type="text"
-          value={inputText}
-          onChange={(e) => setInputText(e.target.value)}
-          onKeyPress={handleKeyPress}
-          placeholder="Type your response..."
-          disabled={isLoading}
-          style={{
+        {/* Level selection screen */}
+        {!lessonStarted ? (
+          <div style={{
             flex: 1,
-            padding: '0.75rem 1rem',
-            fontSize: '1.5rem',
-            fontFamily: "'Amiri', 'Traditional Arabic', serif",
-            border: '1px solid #ddd',
-            borderRadius: '8px',
-            outline: 'none',
-            direction: 'auto',
-          }}
-        />
-        <button
-          onClick={handleSendText}
-          disabled={isLoading || !inputText.trim()}
-          style={{
-            padding: '0.75rem 1.5rem',
-            fontSize: '1rem',
-            backgroundColor: '#1a1a1a',
-            color: '#fff',
-            border: 'none',
-            borderRadius: '8px',
-            cursor: (isLoading || !inputText.trim()) ? 'not-allowed' : 'pointer',
-            opacity: (isLoading || !inputText.trim()) ? 0.5 : 1,
-          }}
-        >
-          {isLoading ? 'Thinking...' : 'Send'}
-        </button>
-      </div>
-
-      {/* ============================================================
-          VOICE RECORDING CONTROLS - COMMENTED OUT
-          ============================================================
-      <div style={{ 
-        padding: '1rem',
-        borderTop: '1px solid #eee',
-        display: 'flex',
-        justifyContent: 'center',
-        gap: '1rem',
-      }}>
-        <button
-          onClick={isRecording ? stopRecording : startRecording}
-          disabled={isLoading || isPlaying}
-          style={{
-            padding: '1rem 2rem',
-            fontSize: '1rem',
-            backgroundColor: isRecording ? '#dc2626' : '#1a1a1a',
-            color: '#fff',
-            border: 'none',
-            borderRadius: '50px',
-            cursor: (isLoading || isPlaying) ? 'not-allowed' : 'pointer',
-            opacity: (isLoading || isPlaying) ? 0.5 : 1,
             display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'center',
             alignItems: 'center',
-            gap: '0.5rem',
-          }}
-        >
-          <span style={{
-            width: '12px',
-            height: '12px',
-            borderRadius: '50%',
-            backgroundColor: isRecording ? '#fff' : '#dc2626',
-          }} />
-          {isRecording ? 'Stop' : 'Speak'}
-        </button>
-      </div>
-      ============================================================ */}
-    </main>
+            gap: '1rem',
+            padding: '2rem',
+          }}>
+            <h2 style={{ 
+              fontFamily: 'Arial, sans-serif',
+              marginBottom: '1rem',
+              color: '#333',
+            }}>
+              Choose your level
+            </h2>
+            {levels.map((level) => (
+              <button
+                key={level.id}
+                onClick={() => startLesson(level.id)}
+                style={{
+                  width: '100%',
+                  maxWidth: '400px',
+                  padding: '1.5rem',
+                  fontSize: '1rem',
+                  fontFamily: 'Arial, sans-serif',
+                  backgroundColor: '#fff',
+                  border: '2px solid #ddd',
+                  borderRadius: '12px',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                }}
+              >
+                <div style={{ fontWeight: 'bold', marginBottom: '0.5rem' }}>
+                  {level.name}
+                </div>
+                <div style={{ color: '#666', fontSize: '0.9rem' }}>
+                  {level.description}
+                </div>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <>
+            {/* ============================================================
+                WHITEBOARD AREA - COMMENTED OUT
+                ============================================================
+            {renderWhiteboard()}
+            ============================================================ */}
+
+            {/* Chat messages */}
+            <div style={{
+              flex: 1,
+              overflowY: 'auto',
+              padding: '1rem',
+              backgroundColor: '#f8f9fa',
+              borderRadius: '8px',
+              marginBottom: '1rem',
+            }}>
+              {isLoading && messages.length === 0 && !streamingText && (
+                <div style={{ 
+                  textAlign: 'center', 
+                  color: '#666',
+                  fontFamily: 'Arial, sans-serif',
+                  padding: '2rem',
+                }}>
+                  Loading lesson...
+                </div>
+              )}
+              
+              {messages.map((message, index) => (
+                <div
+                  key={index}
+                  style={{
+                    marginBottom: '1rem',
+                    padding: '1rem',
+                    borderRadius: '8px',
+                    backgroundColor: message.role === 'user' ? '#e3f2fd' : '#fff',
+                    border: message.role === 'user' ? 'none' : '1px solid #eee',
+                    marginLeft: message.role === 'user' ? '2rem' : '0',
+                    marginRight: message.role === 'user' ? '0' : '2rem',
+                  }}
+                >
+                  <p style={{ 
+                    margin: '0 0 0.5rem', 
+                    fontSize: '0.75rem', 
+                    color: '#666',
+                    fontWeight: 'bold',
+                    fontFamily: 'Arial, sans-serif',
+                  }}>
+                    {message.role === 'user' ? 'You' : 'Teacher'}
+                  </p>
+                  <p style={{ 
+                    margin: 0,
+                    lineHeight: 1.6,
+                    whiteSpace: 'pre-wrap',
+                  }}>
+                    {formatWithArabic(message.content)}
+                  </p>
+                </div>
+              ))}
+
+              {streamingText && (
+                <div
+                  style={{
+                    marginBottom: '1rem',
+                    padding: '1rem',
+                    borderRadius: '8px',
+                    backgroundColor: '#fff',
+                    border: '1px solid #eee',
+                    marginRight: '2rem',
+                  }}
+                >
+                  <p style={{ 
+                    margin: '0 0 0.5rem', 
+                    fontSize: '0.75rem', 
+                    color: '#666',
+                    fontWeight: 'bold',
+                    fontFamily: 'Arial, sans-serif',
+                  }}>
+                    Teacher
+                  </p>
+                  <p style={{ 
+                    margin: 0,
+                    lineHeight: 1.6,
+                    whiteSpace: 'pre-wrap',
+                  }}>
+                    {formatWithArabic(streamingText)}
+                    <span style={{ opacity: 0.5 }}>▊</span>
+                  </p>
+                </div>
+              )}
+
+              {/* ============================================================
+                  VOICE PLAYING INDICATOR - COMMENTED OUT
+                  ============================================================
+              {isPlaying && !streamingText && (
+                <div style={{ 
+                  padding: '0.5rem 1rem',
+                  color: '#666',
+                  fontSize: '0.85rem',
+                }}>
+                  🔊 Speaking...
+                </div>
+              )}
+              ============================================================ */}
+              
+              <div ref={messagesEndRef} />
+            </div>
+
+            {/* Text input */}
+            <div style={{ 
+              padding: '1rem',
+              borderTop: '1px solid #eee',
+              display: 'flex',
+              gap: '0.5rem',
+            }}>
+              <input
+                type="text"
+                value={inputText}
+                onChange={(e) => setInputText(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="Type your response..."
+                disabled={isLoading}
+                style={{
+                  flex: 1,
+                  padding: '0.75rem 1rem',
+                  fontSize: '1.5rem',
+                  fontFamily: "Arial, sans-serif",
+                  border: '1px solid #ddd',
+                  borderRadius: '8px',
+                  outline: 'none',
+                }}
+              />
+              <button
+                onClick={handleSendText}
+                disabled={isLoading || !inputText.trim()}
+                style={{
+                  padding: '0.75rem 1.5rem',
+                  fontSize: '1rem',
+                  fontFamily: "Arial, sans-serif",
+                  backgroundColor: '#1a1a1a',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: '8px',
+                  cursor: (isLoading || !inputText.trim()) ? 'not-allowed' : 'pointer',
+                  opacity: (isLoading || !inputText.trim()) ? 0.5 : 1,
+                }}
+              >
+                {isLoading ? 'Thinking...' : 'Send'}
+              </button>
+            </div>
+
+            {/* ============================================================
+                VOICE RECORDING CONTROLS - COMMENTED OUT
+                ============================================================
+            <div style={{ 
+              padding: '1rem',
+              borderTop: '1px solid #eee',
+              display: 'flex',
+              justifyContent: 'center',
+              gap: '1rem',
+            }}>
+              <button
+                onClick={isRecording ? stopRecording : startRecording}
+                disabled={isLoading || isPlaying}
+                style={{
+                  padding: '1rem 2rem',
+                  fontSize: '1rem',
+                  backgroundColor: isRecording ? '#dc2626' : '#1a1a1a',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: '50px',
+                  cursor: (isLoading || isPlaying) ? 'not-allowed' : 'pointer',
+                  opacity: (isLoading || isPlaying) ? 0.5 : 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                }}
+              >
+                <span style={{
+                  width: '12px',
+                  height: '12px',
+                  borderRadius: '50%',
+                  backgroundColor: isRecording ? '#fff' : '#dc2626',
+                }} />
+                {isRecording ? 'Stop' : 'Speak'}
+              </button>
+            </div>
+            ============================================================ */}
+          </>
+        )}
+      </main>
     </>
   );
 }
