@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { createClient } from '@supabase/supabase-js';
+import { parseObservations, logMultipleObservations } from '@/lib/observationLogger';
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY!,
@@ -105,7 +106,43 @@ ARABIC RECOGNITION - CRITICAL:
 - Focus on meaning and usage, not spelling variations
 
 FIRST MESSAGE:
-- Start with "Asalaam alaikum!" then immediately begin the task for your level`;
+- Start with "Asalaam alaikum!" then immediately begin the task for your level
+
+SILENT LEARNING OBSERVATION LOGGING:
+After processing EVERY user response, log 2-4 observations using this exact format at the START of your response (before your conversational message):
+[OBS:type|category|skill|description]
+
+Observation Types:
+- strength - Correct usage, good understanding, creative application
+- weakness - Errors, confusion, misunderstandings
+- pattern - Recurring behaviors (good or bad) you notice 2+ times
+- breakthrough - "Aha!" moments, sudden understanding, self-correction
+
+Skill Categories:
+- vocabulary - Word choice, usage in context, recall
+- grammar - Conjugation, agreement, sentence structure, case endings
+- pronunciation - Sound production, emphasis (if voice enabled)
+- comprehension - Understanding questions, following context
+- fluency - Naturalness, hesitation patterns, code-switching
+
+Be hyper-specific with the skill name:
+BAD: "grammar error"
+GOOD: "subject-verb agreement with feminine plural"
+BAD: "vocabulary mistake"
+GOOD: "confused في (in) vs على (on) for location"
+
+Example observations:
+[OBS:strength|vocabulary|correct_verb_conjugation|Used "ذهبَ" (he went) with proper fatha ending in past tense context]
+[OBS:weakness|grammar|preposition_confusion|Said "في المطبخ" when context required "إلى المطبخ" (to vs in)]
+[OBS:pattern|fluency|english_word_order|Consistently puts adjectives before nouns instead of Arabic noun-adjective order]
+[OBS:breakthrough|comprehension|case_awareness|Spontaneously asked about why "كتابٌ" had tanween]
+
+Critical Rules:
+- Log observations at the START of your response, before your conversational text
+- Be balanced - log strengths and breakthroughs, not only weaknesses
+- Include the actual Arabic they used (or should have used)
+- These observations are invisible to the user - they only see your conversational response
+- Skip observations for the first greeting message only`;
 
 // ===========================================
 // LEVEL-SPECIFIC PROMPTS
@@ -232,7 +269,7 @@ START: Pick a verb from the vocabulary and ask the student to identify its root,
 
 export async function POST(request: NextRequest) {
   try {
-    const { messages, surahId = 1, level = 1 } = await request.json();
+    const { messages, surahId = 1, level = 1, sessionId } = await request.json();
 
     // Fetch all data in parallel
     const [surahData, scenarios, surahInfo] = await Promise.all([
@@ -270,7 +307,10 @@ export async function POST(request: NextRequest) {
     }));
 
     const encoder = new TextEncoder();
-    
+
+    // Regex to detect OBS tags - we'll buffer until we're past them
+    const obsTagPattern = /\[OBS:[^\]]+\]/g;
+
     const stream = new ReadableStream({
       async start(controller) {
         try {
@@ -281,10 +321,60 @@ export async function POST(request: NextRequest) {
             messages: claudeMessages,
           });
 
+          let fullResponse = '';
+          let buffer = '';
+          let observationsExtracted = false;
+
           for await (const event of response) {
             if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
-              const data = JSON.stringify({ text: event.delta.text });
+              const chunk = event.delta.text;
+              fullResponse += chunk;
+              buffer += chunk;
+
+              // Buffer until we're confident we're past the OBS tags
+              // OBS tags appear at the start, so once we see conversational text, we're done
+              if (!observationsExtracted) {
+                const lastCloseBracket = buffer.lastIndexOf(']');
+                const textAfterTags = lastCloseBracket > -1 ? buffer.slice(lastCloseBracket + 1).trim() : '';
+
+                // If we have text after the last ] or no OBS tags at all, start streaming
+                if (textAfterTags.length > 10 || (!buffer.includes('[OBS:') && buffer.length > 20)) {
+                  observationsExtracted = true;
+                  // Remove all OBS tags and send the cleaned buffer
+                  const cleanedBuffer = buffer.replace(obsTagPattern, '').trim();
+                  if (cleanedBuffer) {
+                    const data = JSON.stringify({ text: cleanedBuffer });
+                    controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+                  }
+                  buffer = '';
+                }
+              } else {
+                // Already past OBS tags, stream directly (but still clean just in case)
+                const cleanedChunk = chunk.replace(obsTagPattern, '');
+                if (cleanedChunk) {
+                  const data = JSON.stringify({ text: cleanedChunk });
+                  controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+                }
+              }
+            }
+          }
+
+          // Flush any remaining buffer
+          if (buffer) {
+            const cleanedBuffer = buffer.replace(obsTagPattern, '').trim();
+            if (cleanedBuffer) {
+              const data = JSON.stringify({ text: cleanedBuffer });
               controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+            }
+          }
+
+          // Log observations asynchronously (don't block the response)
+          if (sessionId && fullResponse) {
+            const { observations } = parseObservations(fullResponse, sessionId);
+            if (observations.length > 0) {
+              logMultipleObservations(observations).catch(err => {
+                console.error('Failed to log observations:', err);
+              });
             }
           }
 

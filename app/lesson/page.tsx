@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
+import LearningReport from '@/components/LearningReport';
 
 // ============================================================
 // VOICE FEATURES - CURRENTLY DISABLED
@@ -83,6 +84,8 @@ export default function LessonPage() {
   const [lessonStarted, setLessonStarted] = useState(false);
   const [inputText, setInputText] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [showReport, setShowReport] = useState(false);
 
   // ============================================================
   // WHITEBOARD STATE - COMMENTED OUT
@@ -107,7 +110,7 @@ export default function LessonPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, streamingText]);
 
-  // Inject CSS for contentEditable styling (client-side only to avoid hydration mismatch)
+  // Inject CSS for contentEditable styling and animations (client-side only to avoid hydration mismatch)
   useEffect(() => {
     const styleId = 'arabic-input-styles';
     if (!document.getElementById(styleId)) {
@@ -122,6 +125,9 @@ export default function LessonPage() {
         [contenteditable]:focus {
           outline: 2px solid #007bff;
           border-color: transparent !important;
+        }
+        @keyframes spin {
+          to { transform: rotate(360deg); }
         }
       `;
       document.head.appendChild(style);
@@ -198,16 +204,19 @@ export default function LessonPage() {
   ];
 
   const startLesson = async (level: number) => {
+    // Generate a unique session ID for tracking observations
+    const newSessionId = crypto.randomUUID();
+    setSessionId(newSessionId);
     setSelectedLevel(level);
     setLessonStarted(true);
     setIsLoading(true);
     setError(null);
-    
+
     try {
-      await streamChat([{ 
-        role: 'user', 
-        content: `Start a level ${level} lesson.` 
-      }], true, level);
+      await streamChat([{
+        role: 'user',
+        content: `Start a level ${level} lesson.`
+      }], true, level, newSessionId);
     } catch (err) {
       console.error('Failed to start lesson:', err);
       setError('Failed to start lesson. Check console for details.');
@@ -256,17 +265,18 @@ export default function LessonPage() {
   */
   // ============================================================
 
-  const streamChat = async (chatMessages: Message[], isSystemMessage = false, level?: number) => {
+  const streamChat = async (chatMessages: Message[], isSystemMessage = false, level?: number, overrideSessionId?: string) => {
     setStreamingText('');
     setError(null);
-    
+
     try {
       const response = await fetch('/api/chat-stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           messages: chatMessages,
           level: level || selectedLevel || 1,
+          sessionId: overrideSessionId || sessionId,
         }),
       });
 
@@ -838,10 +848,39 @@ export default function LessonPage() {
               </button>
             </div>
 
+            {/* Report button */}
+            <div style={{
+              padding: '0.5rem 1rem',
+              display: 'flex',
+              justifyContent: 'center',
+            }}>
+              <button
+                onClick={() => setShowReport(true)}
+                disabled={!sessionId || messages.length < 2}
+                style={{
+                  padding: '0.5rem 1rem',
+                  fontSize: '0.875rem',
+                  fontFamily: 'Arial, sans-serif',
+                  backgroundColor: 'transparent',
+                  color: messages.length >= 2 ? '#3b82f6' : '#999',
+                  border: '1px solid',
+                  borderColor: messages.length >= 2 ? '#3b82f6' : '#ddd',
+                  borderRadius: '20px',
+                  cursor: messages.length >= 2 ? 'pointer' : 'not-allowed',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                }}
+              >
+                <span style={{ fontSize: '1rem' }}>&#10024;</span>
+                Generate Learning Report
+              </button>
+            </div>
+
             {/* ============================================================
                 VOICE RECORDING CONTROLS - COMMENTED OUT
                 ============================================================
-            <div style={{ 
+            <div style={{
               padding: '1rem',
               borderTop: '1px solid #eee',
               display: 'flex',
@@ -876,6 +915,14 @@ export default function LessonPage() {
             </div>
             ============================================================ */}
           </>
+        )}
+
+        {/* Learning Report Modal */}
+        {showReport && sessionId && (
+          <LearningReport
+            sessionId={sessionId}
+            onClose={() => setShowReport(false)}
+          />
         )}
       </main>
     </>

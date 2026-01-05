@@ -80,18 +80,26 @@ CREATE TABLE sessions (
   ayat_covered INTEGER[] DEFAULT '{}' -- Array of ayah_ids covered
 );
 
--- Mistakes table
--- Errors made during sessions, used for personalisation
-CREATE TABLE mistakes (
+-- Learning Observations table (formerly mistakes)
+-- Granular tracking of strengths, weaknesses, patterns, and breakthroughs
+CREATE TABLE learning_observations (
   id SERIAL PRIMARY KEY,
   session_id UUID REFERENCES sessions(id) ON DELETE CASCADE,
   user_id UUID REFERENCES users(id) ON DELETE CASCADE,
   ayah_id INTEGER REFERENCES ayat(id),
   vocabulary_id INTEGER REFERENCES vocabulary(id),
-  mistake_type TEXT NOT NULL, -- grammar | vocabulary | morphology | gender | conjugation
-  student_said TEXT NOT NULL,
-  correction TEXT NOT NULL,
-  explanation TEXT,
+  observation_type TEXT NOT NULL DEFAULT 'weakness'
+    CHECK (observation_type IN ('strength', 'weakness', 'pattern', 'breakthrough')),
+  skill_category TEXT NOT NULL DEFAULT 'vocabulary'
+    CHECK (skill_category IN ('vocabulary', 'grammar', 'pronunciation', 'comprehension', 'fluency')),
+  specific_skill TEXT NOT NULL, -- e.g., "subject-verb agreement with feminine plural"
+  student_response TEXT,
+  observed_behavior TEXT NOT NULL,
+  teaching_note TEXT,
+  confidence_level TEXT
+    CHECK (confidence_level IN ('emerging', 'developing', 'strong', 'mastered')),
+  context TEXT,
+  arabic_example TEXT,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
@@ -122,8 +130,10 @@ CREATE TABLE conversation_logs (
 -- Indexes for common queries
 CREATE INDEX idx_user_progress_user ON user_progress(user_id);
 CREATE INDEX idx_sessions_user ON sessions(user_id);
-CREATE INDEX idx_mistakes_user ON mistakes(user_id);
-CREATE INDEX idx_mistakes_type ON mistakes(user_id, mistake_type);
+CREATE INDEX idx_learning_observations_user ON learning_observations(user_id);
+CREATE INDEX idx_learning_observations_session ON learning_observations(session_id);
+CREATE INDEX idx_learning_observations_type ON learning_observations(user_id, observation_type);
+CREATE INDEX idx_learning_observations_category ON learning_observations(user_id, skill_category);
 CREATE INDEX idx_homework_user_status ON homework(user_id, status);
 CREATE INDEX idx_vocabulary_ayah ON vocabulary(ayah_id);
 CREATE INDEX idx_ayat_surah ON ayat(surah_id);
@@ -134,7 +144,7 @@ CREATE INDEX idx_ayat_surah ON ayat(surah_id);
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_progress ENABLE ROW LEVEL SECURITY;
 ALTER TABLE sessions ENABLE ROW LEVEL SECURITY;
-ALTER TABLE mistakes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE learning_observations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE homework ENABLE ROW LEVEL SECURITY;
 ALTER TABLE conversation_logs ENABLE ROW LEVEL SECURITY;
 
@@ -144,7 +154,7 @@ CREATE POLICY "Users can update own profile" ON users FOR UPDATE USING (auth.uid
 
 CREATE POLICY "Users can view own progress" ON user_progress FOR ALL USING (auth.uid() = user_id);
 CREATE POLICY "Users can view own sessions" ON sessions FOR ALL USING (auth.uid() = user_id);
-CREATE POLICY "Users can view own mistakes" ON mistakes FOR ALL USING (auth.uid() = user_id);
+CREATE POLICY "Users can view own observations" ON learning_observations FOR ALL USING (auth.uid() = user_id);
 CREATE POLICY "Users can view own homework" ON homework FOR ALL USING (auth.uid() = user_id);
 CREATE POLICY "Users can view own conversations" ON conversation_logs FOR ALL USING (
   session_id IN (SELECT id FROM sessions WHERE user_id = auth.uid())
