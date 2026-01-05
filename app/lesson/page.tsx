@@ -52,10 +52,10 @@ function formatWithArabic(text: string): React.ReactNode {
       return (
         <span 
           key={index} 
-          style={{ 
+          style={{
             fontFamily: "'Amiri', 'Traditional Arabic', serif",
             fontSize: '1.8em',
-            lineHeight: 2,
+            lineHeight: 1.5,
           }}
         >
           {part}
@@ -101,16 +101,100 @@ export default function LessonPage() {
   // ============================================================
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, streamingText]);
 
+  // Inject CSS for contentEditable styling (client-side only to avoid hydration mismatch)
+  useEffect(() => {
+    const styleId = 'arabic-input-styles';
+    if (!document.getElementById(styleId)) {
+      const style = document.createElement('style');
+      style.id = styleId;
+      style.textContent = `
+        [data-placeholder]:empty::before {
+          content: attr(data-placeholder);
+          color: #999;
+          pointer-events: none;
+        }
+        [contenteditable]:focus {
+          outline: 2px solid #007bff;
+          border-color: transparent !important;
+        }
+      `;
+      document.head.appendChild(style);
+    }
+  }, []);
+
+
+  // Sync inputText state with contentEditable div and apply Arabic styling
+  const handleInputChange = () => {
+    if (!inputRef.current) return;
+
+    const input = inputRef.current;
+    const text = input.textContent || '';
+    setInputText(text);
+
+    // Apply Arabic styling
+    const arabicRegex = /([\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]+)/g;
+    if (arabicRegex.test(text)) {
+      // Save cursor position
+      const selection = window.getSelection();
+      let cursorPosition = 0;
+      if (selection && selection.rangeCount > 0) {
+        const range = selection.getRangeAt(0);
+        const preCaretRange = range.cloneRange();
+        preCaretRange.selectNodeContents(input);
+        preCaretRange.setEnd(range.endContainer, range.endOffset);
+        cursorPosition = preCaretRange.toString().length;
+      }
+
+      // Rebuild with styled spans
+      arabicRegex.lastIndex = 0;
+      const parts = text.split(arabicRegex);
+      input.innerHTML = parts.map(part => {
+        arabicRegex.lastIndex = 0;
+        if (arabicRegex.test(part)) {
+          return `<span style="font-family: 'Amiri', 'Traditional Arabic', serif; font-size: 1.8em; line-height: 2;">${part}</span>`;
+        }
+        return part;
+      }).join('');
+
+      // Restore cursor position
+      if (selection) {
+        let charCount = 0;
+        const nodeIterator = document.createNodeIterator(input, NodeFilter.SHOW_TEXT);
+        let node;
+        while ((node = nodeIterator.nextNode())) {
+          const nodeLength = node.textContent?.length || 0;
+          if (charCount + nodeLength >= cursorPosition) {
+            const newRange = document.createRange();
+            newRange.setStart(node, cursorPosition - charCount);
+            newRange.collapse(true);
+            selection.removeAllRanges();
+            selection.addRange(newRange);
+            break;
+          }
+          charCount += nodeLength;
+        }
+      }
+    }
+  };
+
+  // Clear the contentEditable div after sending
+  const clearInput = () => {
+    if (inputRef.current) {
+      inputRef.current.textContent = '';
+    }
+    setInputText('');
+  };
+
   const levels = [
-    { id: 1, name: 'Level 1: Translations', description: 'Translate verses from Arabic to English' },
-    { id: 2, name: 'Level 2: Basic', description: 'Simple sentences and basic grammar in everyday scenarios' },
-    { id: 3, name: 'Level 3: Intermediate', description: 'More complex sentences and grammar in scenarios' },
-    { id: 4, name: 'Level 4: Advanced', description: 'Advanced grammar and expression in scenarios' },
+    { id: 1, name: 'Level 1: Beginner', description: 'Translate verses and learn basic grammar (noun, verb, preposition)' },
+    { id: 2, name: 'Level 2: Intermediate', description: 'Simple scenarios with grammatical cases (nominative, accusative, genitive)' },
+    { id: 3, name: 'Level 3: Advanced', description: 'Complex sentences, verb forms (I-X), passive voice, and morphology' },
   ];
 
   const startLesson = async (level: number) => {
@@ -364,12 +448,12 @@ export default function LessonPage() {
 
   const handleSendText = async () => {
     if (!inputText.trim() || isLoading) return;
-    
+
     setIsLoading(true);
     setError(null);
     const userMessage: Message = { role: 'user', content: inputText.trim() };
     setMessages(prev => [...prev, userMessage]);
-    setInputText('');
+    clearInput();
     
     try {
       const allMessages = [...messages, userMessage];
@@ -518,11 +602,11 @@ export default function LessonPage() {
 
   return (
     <>
-      <link 
-        href="https://fonts.googleapis.com/css2?family=Amiri:wght@400;700&display=swap" 
-        rel="stylesheet" 
+      <link
+        href="https://fonts.googleapis.com/css2?family=Amiri:wght@400;700&display=swap"
+        rel="stylesheet"
       />
-      
+
       <main style={{
         maxWidth: '900px',
         margin: '0 auto',
@@ -709,27 +793,30 @@ export default function LessonPage() {
             </div>
 
             {/* Text input */}
-            <div style={{ 
+            <div style={{
               padding: '1rem',
               borderTop: '1px solid #eee',
               display: 'flex',
               gap: '0.5rem',
+              alignItems: 'center',
             }}>
-              <input
-                type="text"
-                value={inputText}
-                onChange={(e) => setInputText(e.target.value)}
+              <div
+                ref={inputRef}
+                contentEditable={!isLoading}
+                onInput={handleInputChange}
                 onKeyDown={handleKeyDown}
-                placeholder="Type your response..."
-                disabled={isLoading}
+                data-placeholder="Type your response..."
                 style={{
                   flex: 1,
                   padding: '0.75rem 1rem',
-                  fontSize: '1.5rem',
+                  fontSize: '1rem',
                   fontFamily: "Arial, sans-serif",
                   border: '1px solid #ddd',
                   borderRadius: '8px',
                   outline: 'none',
+                  minHeight: '1.5rem',
+                  maxHeight: '6rem',
+                  overflowY: 'auto',
                 }}
               />
               <button
