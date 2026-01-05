@@ -100,9 +100,9 @@ FIRST MESSAGE EXAMPLE:
 }
 
 function buildLevel2Prompt(verses: any[], words: any[], surahName: string): string {
-  const vocabList = [...new Set(words.map((w: any) => 
+  const vocabList = Array.from(new Set(words.map((w: any) =>
     `${w.text_arabic} (${w.transliteration || '?'}) - ${w.translation_english || '?'}`
-  ))].slice(0, 15).join('\n');
+  ))).slice(0, 15).join('\n');
 
   return `
 LEVEL 2: BASIC SCENARIOS
@@ -122,9 +122,9 @@ FIRST MESSAGE EXAMPLE:
 }
 
 function buildLevel3Prompt(verses: any[], words: any[], surahName: string): string {
-  const vocabList = [...new Set(words.map((w: any) => 
+  const vocabList = Array.from(new Set(words.map((w: any) =>
     `${w.text_arabic} (${w.transliteration || '?'}) - ${w.translation_english || '?'} [${w.part_of_speech || '?'}]`
-  ))].slice(0, 20).join('\n');
+  ))).slice(0, 20).join('\n');
 
   return `
 LEVEL 3: INTERMEDIATE SCENARIOS
@@ -143,9 +143,9 @@ FIRST MESSAGE EXAMPLE:
 }
 
 function buildLevel4Prompt(verses: any[], words: any[], surahName: string): string {
-  const vocabList = [...new Set(words.map((w: any) => 
+  const vocabList = Array.from(new Set(words.map((w: any) =>
     `${w.text_arabic} (${w.transliteration || '?'}) - ${w.translation_english || '?'} [${w.part_of_speech || '?'}]`
-  ))].join('\n');
+  ))).join('\n');
 
   return `
 LEVEL 4: ADVANCED SCENARIOS
