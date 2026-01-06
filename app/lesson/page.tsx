@@ -55,7 +55,7 @@ function formatWithArabic(text: string): React.ReactNode {
           key={index} 
           style={{
             fontFamily: "'Amiri', 'Traditional Arabic', serif",
-            fontSize: '1.8em',
+            fontSize: '1.4em',
             lineHeight: 1.5,
           }}
         >
@@ -163,7 +163,7 @@ export default function LessonPage() {
       input.innerHTML = parts.map(part => {
         arabicRegex.lastIndex = 0;
         if (arabicRegex.test(part)) {
-          return `<span style="font-family: 'Amiri', 'Traditional Arabic', serif; font-size: 1.8em; line-height: 2;">${part}</span>`;
+          return `<span style="font-family: 'Amiri', 'Traditional Arabic', serif; font-size: 1.4em; line-height: 1.5;">${part}</span>`;
         }
         return part;
       }).join('');

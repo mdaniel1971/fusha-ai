@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 import { generateReport, getMotivationalMessage } from '@/lib/reportGenerator';
 
 export async function POST(request: NextRequest) {
@@ -6,33 +6,35 @@ export async function POST(request: NextRequest) {
     const { sessionId } = await request.json();
 
     if (!sessionId) {
-      return NextResponse.json(
-        { error: 'Session ID is required' },
-        { status: 400 }
+      return new Response(
+        JSON.stringify({ error: 'Session ID required' }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } }
       );
     }
 
     const report = await generateReport(sessionId);
 
     if (!report) {
-      return NextResponse.json(
-        { error: 'Failed to generate report' },
-        { status: 500 }
+      return new Response(
+        JSON.stringify({ error: 'Failed to generate report' }),
+        { status: 500, headers: { 'Content-Type': 'application/json' } }
       );
     }
 
-    // Add motivational message
     const motivationalMessage = getMotivationalMessage(report.sessionSummary.overallScore);
 
-    return NextResponse.json({
-      ...report,
-      motivationalMessage,
-    });
+    return new Response(
+      JSON.stringify({
+        ...report,
+        motivationalMessage,
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
   } catch (error) {
-    console.error('Report generation error:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
+    console.error('Report error:', error);
+    return new Response(
+      JSON.stringify({ error: 'Failed to generate report' }),
+      { status: 500, headers: { 'Content-Type': 'application/json' } }
     );
   }
 }
