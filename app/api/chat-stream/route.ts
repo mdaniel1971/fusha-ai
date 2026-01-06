@@ -240,7 +240,7 @@ START: Pick a verb, ask student to identify root, form, meaning.`;
 
 export async function POST(request: NextRequest) {
   try {
-    const { messages, surahId = 1, level = 1, sessionId } = await request.json();
+    const { messages, surahId = 1, level = 1, sessionId, model = 'claude-haiku-4-5-20251001' } = await request.json();
 
     // Fetch all data in parallel
     const [surahData, scenarios, surahInfo] = await Promise.all([
@@ -279,11 +279,18 @@ export async function POST(request: NextRequest) {
 
     const encoder = new TextEncoder();
 
+    // Pricing per million tokens (from Anthropic console, Jan 2026)
+    const MODEL_PRICING: Record<string, { input: number; output: number }> = {
+      'claude-haiku-4-5-20251001': { input: 1.00, output: 5.00 },
+      'claude-sonnet-4-5-20250929': { input: 3.00, output: 15.00 },
+      'claude-opus-4-5-20251101': { input: 5.00, output: 25.00 },
+    };
+
     const stream = new ReadableStream({
       async start(controller) {
         try {
           const response = await anthropic.messages.stream({
-            model: 'claude-haiku-4-5-20251001',
+            model,
             max_tokens: 512,
             system: systemPrompt,
             messages: claudeMessages,
@@ -297,6 +304,14 @@ export async function POST(request: NextRequest) {
               fullResponse += event.delta.text;
             }
           }
+
+          // Get final message with usage info
+          const finalMessage = await response.finalMessage();
+          const usage = finalMessage.usage;
+          const pricing = MODEL_PRICING[model] || MODEL_PRICING['claude-haiku-4-5-20251001'];
+          const inputCost = (usage.input_tokens / 1_000_000) * pricing.input;
+          const outputCost = (usage.output_tokens / 1_000_000) * pricing.output;
+          const totalCost = inputCost + outputCost;
 
           // Remove all OBS tags and markdown formatting from the complete response
           let cleanedResponse = fullResponse.replace(/\[OBS:[^\]]+\]\s*/g, '').trim();
@@ -317,6 +332,20 @@ export async function POST(request: NextRequest) {
               controller.enqueue(encoder.encode(`data: ${data}\n\n`));
             }
           }
+
+          // Send usage data as a separate event
+          const usageData = JSON.stringify({
+            usage: {
+              inputTokens: usage.input_tokens,
+              outputTokens: usage.output_tokens,
+              totalTokens: usage.input_tokens + usage.output_tokens,
+              inputCost: inputCost.toFixed(6),
+              outputCost: outputCost.toFixed(6),
+              totalCost: totalCost.toFixed(6),
+              model,
+            }
+          });
+          controller.enqueue(encoder.encode(`data: ${usageData}\n\n`));
 
           // Log observations asynchronously (don't block the response)
           if (sessionId && fullResponse) {

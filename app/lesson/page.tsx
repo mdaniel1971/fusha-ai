@@ -19,6 +19,17 @@ import LearningReport from '@/components/LearningReport';
 interface Message {
   role: 'user' | 'assistant';
   content: string;
+  usage?: TokenUsage;
+}
+
+interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  inputCost: string;
+  outputCost: string;
+  totalCost: string;
+  model: string;
 }
 
 // ============================================================
@@ -76,6 +87,30 @@ function formatWithArabic(text: string): React.ReactNode {
   });
 }
 
+interface ModelOption {
+  id: string;
+  name: string;
+  description: string;
+}
+
+const AVAILABLE_MODELS: ModelOption[] = [
+  {
+    id: 'claude-haiku-4-5-20251001',
+    name: 'Haiku',
+    description: 'Fast and efficient, best for quick responses',
+  },
+  {
+    id: 'claude-sonnet-4-5-20250929',
+    name: 'Sonnet',
+    description: 'Balanced performance and quality',
+  },
+  {
+    id: 'claude-opus-4-5-20251101',
+    name: 'Opus',
+    description: 'Most capable, best for complex teaching',
+  },
+];
+
 export default function LessonPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -86,6 +121,10 @@ export default function LessonPage() {
   const [error, setError] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [showReport, setShowReport] = useState(false);
+  const [selectedModel, setSelectedModel] = useState<string>('');
+  const [modelChosen, setModelChosen] = useState(false);
+  const [totalSessionCost, setTotalSessionCost] = useState(0);
+  const [lastUsage, setLastUsage] = useState<TokenUsage | null>(null);
 
   // ============================================================
   // WHITEBOARD STATE - COMMENTED OUT
@@ -277,6 +316,7 @@ export default function LessonPage() {
           messages: chatMessages,
           level: level || selectedLevel || 1,
           sessionId: overrideSessionId || sessionId,
+          model: selectedModel,
         }),
       });
 
@@ -291,25 +331,26 @@ export default function LessonPage() {
 
       const decoder = new TextDecoder();
       let fullText = '';
+      let usageData: TokenUsage | null = null;
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        
+
         const chunk = decoder.decode(value);
         const lines = chunk.split('\n');
-        
+
         for (const line of lines) {
           if (line.startsWith('data: ')) {
             const data = line.slice(6);
             if (data === '[DONE]') continue;
-            
+
             try {
               const parsed = JSON.parse(data);
               if (parsed.text) {
                 fullText += parsed.text;
                 setStreamingText(fullText);
-                
+
                 // ============================================================
                 // WHITEBOARD PARSING IN STREAM - COMMENTED OUT
                 // ============================================================
@@ -319,6 +360,11 @@ export default function LessonPage() {
                 // }
                 // setStreamingText(speech);
                 // ============================================================
+              }
+              if (parsed.usage) {
+                usageData = parsed.usage;
+                setLastUsage(usageData);
+                setTotalSessionCost(prev => prev + parseFloat(parsed.usage.totalCost));
               }
               if (parsed.error) {
                 console.error('Stream error:', parsed.error);
@@ -339,10 +385,11 @@ export default function LessonPage() {
       // ============================================================
 
       if (fullText) {
+        const newMessage: Message = { role: 'assistant', content: fullText, usage: usageData || undefined };
         if (isSystemMessage) {
-          setMessages([{ role: 'assistant', content: fullText }]);
+          setMessages([newMessage]);
         } else {
-          setMessages(prev => [...prev, { role: 'assistant', content: fullText }]);
+          setMessages(prev => [...prev, newMessage]);
         }
       }
       
@@ -625,8 +672,8 @@ export default function LessonPage() {
         display: 'flex',
         flexDirection: 'column',
       }}>
-        <h1 style={{ 
-          textAlign: 'center', 
+        <h1 style={{
+          textAlign: 'center',
           marginBottom: '1rem',
           fontSize: '1.5rem',
           color: '#1a1a1a',
@@ -650,7 +697,7 @@ export default function LessonPage() {
           </div>
         )}
 
-        {/* Level selection screen */}
+        {/* Model and Level selection screen */}
         {!lessonStarted ? (
           <div style={{
             flex: 1,
@@ -658,41 +705,164 @@ export default function LessonPage() {
             flexDirection: 'column',
             justifyContent: 'center',
             alignItems: 'center',
-            gap: '1rem',
+            gap: '2rem',
             padding: '2rem',
           }}>
-            <h2 style={{ 
-              fontFamily: 'Arial, sans-serif',
-              marginBottom: '1rem',
-              color: '#333',
-            }}>
-              Choose your level
-            </h2>
-            {levels.map((level) => (
-              <button
-                key={level.id}
-                onClick={() => startLesson(level.id)}
-                style={{
+            {/* Model Selection */}
+            {!modelChosen ? (
+              <div style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: '1rem',
+              }}>
+                <h2 style={{
+                  fontFamily: 'Arial, sans-serif',
+                  marginBottom: '0.5rem',
+                  color: '#333',
+                }}>
+                  Choose a model
+                </h2>
+                <p style={{
+                  fontFamily: 'Arial, sans-serif',
+                  color: '#666',
+                  fontSize: '0.9rem',
+                  marginBottom: '1rem',
+                  textAlign: 'center',
+                  maxWidth: '400px',
+                }}>
+                  Select which Claude model to use for this lesson
+                </p>
+                <div style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '0.75rem',
                   width: '100%',
                   maxWidth: '400px',
-                  padding: '1.5rem',
-                  fontSize: '1rem',
+                }}>
+                  {AVAILABLE_MODELS.map((model) => (
+                    <button
+                      key={model.id}
+                      onClick={() => {
+                        setSelectedModel(model.id);
+                        setModelChosen(true);
+                      }}
+                      style={{
+                        padding: '1.25rem',
+                        fontSize: '1rem',
+                        fontFamily: 'Arial, sans-serif',
+                        backgroundColor: '#fff',
+                        border: '2px solid #ddd',
+                        borderRadius: '12px',
+                        cursor: 'pointer',
+                        textAlign: 'left',
+                        transition: 'all 0.2s ease',
+                      }}
+                      onMouseEnter={(e) => {
+                        (e.currentTarget as HTMLButtonElement).style.borderColor = '#3b82f6';
+                        (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#f0f7ff';
+                      }}
+                      onMouseLeave={(e) => {
+                        (e.currentTarget as HTMLButtonElement).style.borderColor = '#ddd';
+                        (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#fff';
+                      }}
+                    >
+                      <div style={{ fontWeight: 'bold', marginBottom: '0.25rem' }}>
+                        {model.name}
+                      </div>
+                      <div style={{ color: '#666', fontSize: '0.9rem' }}>
+                        {model.description}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              /* Level Selection */
+              <div style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: '1rem',
+              }}>
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  marginBottom: '0.5rem',
+                }}>
+                  <button
+                    onClick={() => setModelChosen(false)}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: '#3b82f6',
+                      cursor: 'pointer',
+                      fontSize: '1.5rem',
+                      padding: '0.25rem',
+                      lineHeight: 1,
+                    }}
+                  >
+                    ←
+                  </button>
+                  <h2 style={{
+                    fontFamily: 'Arial, sans-serif',
+                    margin: 0,
+                    color: '#333',
+                  }}>
+                    Choose your level
+                  </h2>
+                </div>
+                <p style={{
                   fontFamily: 'Arial, sans-serif',
-                  backgroundColor: '#fff',
-                  border: '2px solid #ddd',
-                  borderRadius: '12px',
-                  cursor: 'pointer',
-                  textAlign: 'left',
-                }}
-              >
-                <div style={{ fontWeight: 'bold', marginBottom: '0.5rem' }}>
-                  {level.name}
+                  color: '#666',
+                  fontSize: '0.9rem',
+                  marginBottom: '0.5rem',
+                }}>
+                  Using {AVAILABLE_MODELS.find(m => m.id === selectedModel)?.name}
+                </p>
+                <div style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '0.75rem',
+                  width: '100%',
+                  maxWidth: '400px',
+                }}>
+                  {levels.map((level) => (
+                    <button
+                      key={level.id}
+                      onClick={() => startLesson(level.id)}
+                      style={{
+                        padding: '1.5rem',
+                        fontSize: '1rem',
+                        fontFamily: 'Arial, sans-serif',
+                        backgroundColor: '#fff',
+                        border: '2px solid #ddd',
+                        borderRadius: '12px',
+                        cursor: 'pointer',
+                        textAlign: 'left',
+                        transition: 'all 0.2s ease',
+                      }}
+                      onMouseEnter={(e) => {
+                        (e.currentTarget as HTMLButtonElement).style.borderColor = '#3b82f6';
+                        (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#f0f7ff';
+                      }}
+                      onMouseLeave={(e) => {
+                        (e.currentTarget as HTMLButtonElement).style.borderColor = '#ddd';
+                        (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#fff';
+                      }}
+                    >
+                      <div style={{ fontWeight: 'bold', marginBottom: '0.5rem' }}>
+                        {level.name}
+                      </div>
+                      <div style={{ color: '#666', fontSize: '0.9rem' }}>
+                        {level.description}
+                      </div>
+                    </button>
+                  ))}
                 </div>
-                <div style={{ color: '#666', fontSize: '0.9rem' }}>
-                  {level.description}
-                </div>
-              </button>
-            ))}
+              </div>
+            )}
           </div>
         ) : (
           <>
@@ -735,22 +905,42 @@ export default function LessonPage() {
                     marginRight: message.role === 'user' ? '0' : '2rem',
                   }}
                 >
-                  <p style={{ 
-                    margin: '0 0 0.5rem', 
-                    fontSize: '0.75rem', 
+                  <p style={{
+                    margin: '0 0 0.5rem',
+                    fontSize: '0.75rem',
                     color: '#666',
                     fontWeight: 'bold',
                     fontFamily: 'Arial, sans-serif',
                   }}>
                     {message.role === 'user' ? 'You' : 'Teacher'}
                   </p>
-                  <p style={{ 
+                  <p style={{
                     margin: 0,
                     lineHeight: 1.6,
                     whiteSpace: 'pre-wrap',
                   }}>
                     {formatWithArabic(message.content)}
                   </p>
+                  {/* Token usage display for assistant messages */}
+                  {message.role === 'assistant' && message.usage && (
+                    <div style={{
+                      marginTop: '0.75rem',
+                      padding: '0.5rem 0.75rem',
+                      backgroundColor: '#f0f0f0',
+                      borderRadius: '6px',
+                      fontSize: '0.7rem',
+                      fontFamily: 'monospace',
+                      color: '#666',
+                      display: 'flex',
+                      flexWrap: 'wrap',
+                      gap: '0.75rem',
+                    }}>
+                      <span>In: {message.usage.inputTokens} tok</span>
+                      <span>Out: {message.usage.outputTokens} tok</span>
+                      <span>Total: {message.usage.totalTokens} tok</span>
+                      <span style={{ color: '#059669' }}>Cost: ${message.usage.totalCost}</span>
+                    </div>
+                  )}
                 </div>
               ))}
 
@@ -848,12 +1038,30 @@ export default function LessonPage() {
               </button>
             </div>
 
-            {/* Report button */}
+            {/* Report button and Session Cost */}
             <div style={{
               padding: '0.5rem 1rem',
               display: 'flex',
-              justifyContent: 'center',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              gap: '1rem',
             }}>
+              {/* Session cost summary */}
+              <div style={{
+                padding: '0.5rem 0.75rem',
+                backgroundColor: '#f8f8f8',
+                borderRadius: '8px',
+                fontSize: '0.75rem',
+                fontFamily: 'monospace',
+                color: '#666',
+                display: 'flex',
+                gap: '1rem',
+                alignItems: 'center',
+              }}>
+                <span>Model: <strong>{AVAILABLE_MODELS.find(m => m.id === selectedModel)?.name}</strong></span>
+                <span>Session: <strong style={{ color: '#059669' }}>${totalSessionCost.toFixed(4)}</strong></span>
+              </div>
+
               <button
                 onClick={() => setShowReport(true)}
                 disabled={!sessionId || messages.length < 2}
