@@ -240,37 +240,44 @@ START: Pick a verb, ask student to identify root, form, meaning.`;
 
 export async function POST(request: NextRequest) {
   try {
-    const { messages, surahId = 1, level = 1, sessionId, model = 'claude-haiku-4-5-20251001' } = await request.json();
+    const { messages, surahId = 1, level = 1, sessionId, model = 'claude-haiku-4-5-20251001', systemOverride } = await request.json();
 
-    // Fetch all data in parallel
-    const [surahData, scenarios, surahInfo] = await Promise.all([
-      fetchSurahData(surahId),
-      fetchScenarios(surahId),
-      supabase.from('surahs').select('name_english').eq('id', surahId).single()
-    ]);
+    let systemPrompt: string;
 
-    const { verses, words } = surahData;
-    const surahName = surahInfo.data?.name_english || `Surah ${surahId}`;
-    const scenariosText = formatScenarios(scenarios);
+    // If systemOverride is provided, use it directly (for scenario mode)
+    if (systemOverride) {
+      systemPrompt = systemOverride;
+    } else {
+      // Fetch all data in parallel for standard lesson mode
+      const [surahData, scenarios, surahInfo] = await Promise.all([
+        fetchSurahData(surahId),
+        fetchScenarios(surahId),
+        supabase.from('surahs').select('name_english').eq('id', surahId).single()
+      ]);
 
-    // Build level-specific prompt
-    let levelPrompt: string;
-    switch (level) {
-      case 1:
-        levelPrompt = buildLevel1Prompt(verses, words, surahName, scenariosText);
-        break;
-      case 2:
-        levelPrompt = buildLevel2Prompt(verses, words, surahName, scenariosText);
-        break;
-      case 3:
-        levelPrompt = buildLevel3Prompt(verses, words, surahName, scenariosText);
-        break;
-      default:
-        levelPrompt = buildLevel1Prompt(verses, words, surahName, scenariosText);
+      const { verses, words } = surahData;
+      const surahName = surahInfo.data?.name_english || `Surah ${surahId}`;
+      const scenariosText = formatScenarios(scenarios);
+
+      // Build level-specific prompt
+      let levelPrompt: string;
+      switch (level) {
+        case 1:
+          levelPrompt = buildLevel1Prompt(verses, words, surahName, scenariosText);
+          break;
+        case 2:
+          levelPrompt = buildLevel2Prompt(verses, words, surahName, scenariosText);
+          break;
+        case 3:
+          levelPrompt = buildLevel3Prompt(verses, words, surahName, scenariosText);
+          break;
+        default:
+          levelPrompt = buildLevel1Prompt(verses, words, surahName, scenariosText);
+      }
+
+      // Combine meta + level prompt
+      systemPrompt = META_PROMPT + '\n' + levelPrompt;
     }
-
-    // Combine meta + level prompt
-    const systemPrompt = META_PROMPT + '\n' + levelPrompt;
 
     const claudeMessages = messages.map((msg: { role: string; content: string }) => ({
       role: msg.role as 'user' | 'assistant',

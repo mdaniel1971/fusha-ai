@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import LearningReport from '@/components/LearningReport';
+import ScenarioView from '@/components/ScenarioView';
 
 // ============================================================
 // VOICE FEATURES - CURRENTLY DISABLED
@@ -111,6 +112,8 @@ const AVAILABLE_MODELS: ModelOption[] = [
   },
 ];
 
+type LessonMode = 'traditional' | 'scenario';
+
 export default function LessonPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -125,6 +128,10 @@ export default function LessonPage() {
   const [modelChosen, setModelChosen] = useState(false);
   const [totalSessionCost, setTotalSessionCost] = useState(0);
   const [lastUsage, setLastUsage] = useState<TokenUsage | null>(null);
+  const [lessonMode, setLessonMode] = useState<LessonMode | null>(null);
+  const [selectedScenarioId, setSelectedScenarioId] = useState<number | null>(null);
+  const [scenarioEditMode, setScenarioEditMode] = useState(false);
+  const [availableScenarios, setAvailableScenarios] = useState<Array<{id: number; title: string; setup_arabic: string; setup_english: string}>>([]);
 
   // ============================================================
   // WHITEBOARD STATE - COMMENTED OUT
@@ -148,6 +155,20 @@ export default function LessonPage() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, streamingText]);
+
+  // Fetch available scenarios when scenario mode is selected
+  useEffect(() => {
+    if (lessonMode === 'scenario' && availableScenarios.length === 0) {
+      fetch('/api/scenarios')
+        .then(res => res.json())
+        .then(data => {
+          if (data.scenarios) {
+            setAvailableScenarios(data.scenarios);
+          }
+        })
+        .catch(err => console.error('Failed to fetch scenarios:', err));
+    }
+  }, [lessonMode, availableScenarios.length]);
 
   // Inject CSS for contentEditable styling and animations (client-side only to avoid hydration mismatch)
   useEffect(() => {
@@ -777,8 +798,8 @@ export default function LessonPage() {
                   ))}
                 </div>
               </div>
-            ) : (
-              /* Level Selection */
+            ) : lessonMode === null ? (
+              /* Mode Selection */
               <div style={{
                 display: 'flex',
                 flexDirection: 'column',
@@ -803,7 +824,125 @@ export default function LessonPage() {
                       lineHeight: 1,
                     }}
                   >
-                    ←
+                    &#8592;
+                  </button>
+                  <h2 style={{
+                    fontFamily: 'Arial, sans-serif',
+                    margin: 0,
+                    color: '#333',
+                  }}>
+                    Choose lesson type
+                  </h2>
+                </div>
+                <p style={{
+                  fontFamily: 'Arial, sans-serif',
+                  color: '#666',
+                  fontSize: '0.9rem',
+                  marginBottom: '0.5rem',
+                }}>
+                  Using {AVAILABLE_MODELS.find(m => m.id === selectedModel)?.name}
+                </p>
+                <div style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '0.75rem',
+                  width: '100%',
+                  maxWidth: '450px',
+                }}>
+                  <button
+                    onClick={() => setLessonMode('traditional')}
+                    style={{
+                      padding: '1.5rem',
+                      fontSize: '1rem',
+                      fontFamily: 'Arial, sans-serif',
+                      backgroundColor: '#fff',
+                      border: '2px solid #ddd',
+                      borderRadius: '12px',
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                      transition: 'all 0.2s ease',
+                    }}
+                    onMouseEnter={(e) => {
+                      (e.currentTarget as HTMLButtonElement).style.borderColor = '#3b82f6';
+                      (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#f0f7ff';
+                    }}
+                    onMouseLeave={(e) => {
+                      (e.currentTarget as HTMLButtonElement).style.borderColor = '#ddd';
+                      (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#fff';
+                    }}
+                  >
+                    <div style={{ fontWeight: 'bold', marginBottom: '0.5rem' }}>
+                      Traditional Lesson
+                    </div>
+                    <div style={{ color: '#666', fontSize: '0.9rem' }}>
+                      Chat-based Arabic lessons with Quranic vocabulary and grammar
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => setLessonMode('scenario')}
+                    style={{
+                      padding: '1.5rem',
+                      fontSize: '1rem',
+                      fontFamily: 'Arial, sans-serif',
+                      backgroundColor: '#fff',
+                      border: '2px solid #10b981',
+                      borderRadius: '12px',
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                      transition: 'all 0.2s ease',
+                    }}
+                    onMouseEnter={(e) => {
+                      (e.currentTarget as HTMLButtonElement).style.borderColor = '#059669';
+                      (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#ecfdf5';
+                    }}
+                    onMouseLeave={(e) => {
+                      (e.currentTarget as HTMLButtonElement).style.borderColor = '#10b981';
+                      (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#fff';
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                      <span style={{ fontWeight: 'bold' }}>Visual Scenarios</span>
+                      <span style={{
+                        backgroundColor: '#10b981',
+                        color: '#fff',
+                        fontSize: '0.7rem',
+                        padding: '2px 6px',
+                        borderRadius: '4px',
+                      }}>NEW</span>
+                    </div>
+                    <div style={{ color: '#666', fontSize: '0.9rem' }}>
+                      Interactive scenes with clickable elements for contextual learning
+                    </div>
+                  </button>
+                </div>
+              </div>
+            ) : lessonMode === 'traditional' ? (
+              /* Level Selection for Traditional */
+              <div style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: '1rem',
+              }}>
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  marginBottom: '0.5rem',
+                }}>
+                  <button
+                    onClick={() => setLessonMode(null)}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: '#3b82f6',
+                      cursor: 'pointer',
+                      fontSize: '1.5rem',
+                      padding: '0.25rem',
+                      lineHeight: 1,
+                    }}
+                  >
+                    &#8592;
                   </button>
                   <h2 style={{
                     fontFamily: 'Arial, sans-serif',
@@ -862,9 +1001,181 @@ export default function LessonPage() {
                   ))}
                 </div>
               </div>
+            ) : (
+              /* Scenario Selection */
+              <div style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: '1rem',
+              }}>
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  marginBottom: '0.5rem',
+                }}>
+                  <button
+                    onClick={() => setLessonMode(null)}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: '#3b82f6',
+                      cursor: 'pointer',
+                      fontSize: '1.5rem',
+                      padding: '0.25rem',
+                      lineHeight: 1,
+                    }}
+                  >
+                    &#8592;
+                  </button>
+                  <h2 style={{
+                    fontFamily: 'Arial, sans-serif',
+                    margin: 0,
+                    color: '#333',
+                  }}>
+                    Choose a scenario
+                  </h2>
+                </div>
+                <p style={{
+                  fontFamily: 'Arial, sans-serif',
+                  color: '#666',
+                  fontSize: '0.9rem',
+                  marginBottom: '0.5rem',
+                }}>
+                  Using {AVAILABLE_MODELS.find(m => m.id === selectedModel)?.name}
+                </p>
+                {/* Edit mode toggle */}
+                <label style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  fontSize: '0.85rem',
+                  fontFamily: 'Arial, sans-serif',
+                  color: '#666',
+                  cursor: 'pointer',
+                }}>
+                  <input
+                    type="checkbox"
+                    checked={scenarioEditMode}
+                    onChange={(e) => setScenarioEditMode(e.target.checked)}
+                  />
+                  Edit mode (place hotspots)
+                </label>
+                <div style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '0.75rem',
+                  width: '100%',
+                  maxWidth: '450px',
+                }}>
+                  {availableScenarios.length === 0 ? (
+                    <p style={{ textAlign: 'center', color: '#666', fontFamily: 'Arial, sans-serif' }}>
+                      Loading scenarios...
+                    </p>
+                  ) : (
+                    availableScenarios.map((scenario) => (
+                      <button
+                        key={scenario.id}
+                        onClick={() => {
+                          setSelectedScenarioId(scenario.id);
+                          setSessionId(crypto.randomUUID());
+                          setLessonStarted(true);
+                        }}
+                        style={{
+                          padding: '1.5rem',
+                          fontSize: '1rem',
+                          fontFamily: 'Arial, sans-serif',
+                          backgroundColor: '#fff',
+                          border: '2px solid #10b981',
+                          borderRadius: '12px',
+                          cursor: 'pointer',
+                          textAlign: 'left',
+                          transition: 'all 0.2s ease',
+                        }}
+                        onMouseEnter={(e) => {
+                          (e.currentTarget as HTMLButtonElement).style.borderColor = '#059669';
+                          (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#ecfdf5';
+                        }}
+                        onMouseLeave={(e) => {
+                          (e.currentTarget as HTMLButtonElement).style.borderColor = '#10b981';
+                          (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#fff';
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                          <span style={{ fontWeight: 'bold' }}>{scenario.title}</span>
+                          <span style={{
+                            fontFamily: "'Amiri', serif",
+                            fontSize: '1.1rem',
+                            color: '#333',
+                          }}>{scenario.setup_arabic}</span>
+                        </div>
+                        <div style={{ color: '#666', fontSize: '0.9rem' }}>
+                          {scenario.setup_english}
+                        </div>
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
             )}
           </div>
+        ) : selectedScenarioId ? (
+          /* Scenario Mode */
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            <ScenarioView
+              scenarioId={selectedScenarioId}
+              editMode={scenarioEditMode}
+            />
+            {/* Bottom bar for scenario mode */}
+            <div style={{
+              padding: '0.5rem 1rem',
+              backgroundColor: '#fff',
+              borderTop: '1px solid #eee',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+            }}>
+              <div style={{
+                padding: '0.5rem 0.75rem',
+                backgroundColor: '#f8f8f8',
+                borderRadius: '8px',
+                fontSize: '0.75rem',
+                fontFamily: 'monospace',
+                color: '#666',
+                display: 'flex',
+                gap: '1rem',
+                alignItems: 'center',
+              }}>
+                {scenarioEditMode && (
+                  <span style={{ color: '#3b82f6', fontWeight: 'bold' }}>EDIT MODE</span>
+                )}
+                <span>Scenario #{selectedScenarioId}</span>
+              </div>
+              <button
+                onClick={() => {
+                  setLessonStarted(false);
+                  setSelectedScenarioId(null);
+                  setLessonMode(null);
+                  setTotalSessionCost(0);
+                }}
+                style={{
+                  padding: '0.5rem 1rem',
+                  fontSize: '0.875rem',
+                  fontFamily: 'Arial, sans-serif',
+                  backgroundColor: 'transparent',
+                  color: '#666',
+                  border: '1px solid #ddd',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                }}
+              >
+                Exit Scenario
+              </button>
+            </div>
+          </div>
         ) : (
+          /* Traditional Lesson Mode */
           <>
             {/* ============================================================
                 WHITEBOARD AREA - COMMENTED OUT
