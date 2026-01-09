@@ -1,6 +1,6 @@
 # FushaAI
 
-A personal Quran Arabic tutor. Learn Quranic Arabic through conversation, not flashcards.
+A personal Quran Arabic tutor. Learn Quranic Arabic through diagnostic conversations giving personalised reports and recommended learning.
 
 ## Current State
 
