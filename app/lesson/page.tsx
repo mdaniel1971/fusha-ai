@@ -798,8 +798,8 @@ export default function LessonPage() {
                   ))}
                 </div>
               </div>
-            ) : lessonMode === null ? (
-              /* Mode Selection */
+            ) : lessonMode === null || lessonMode === 'traditional' ? (
+              /* Level Selection - shown directly after model selection */
               <div style={{
                 display: 'flex',
                 flexDirection: 'column',
@@ -814,124 +814,6 @@ export default function LessonPage() {
                 }}>
                   <button
                     onClick={() => setModelChosen(false)}
-                    style={{
-                      background: 'none',
-                      border: 'none',
-                      color: '#3b82f6',
-                      cursor: 'pointer',
-                      fontSize: '1.5rem',
-                      padding: '0.25rem',
-                      lineHeight: 1,
-                    }}
-                  >
-                    &#8592;
-                  </button>
-                  <h2 style={{
-                    fontFamily: 'Arial, sans-serif',
-                    margin: 0,
-                    color: '#333',
-                  }}>
-                    Choose lesson type
-                  </h2>
-                </div>
-                <p style={{
-                  fontFamily: 'Arial, sans-serif',
-                  color: '#666',
-                  fontSize: '0.9rem',
-                  marginBottom: '0.5rem',
-                }}>
-                  Using {AVAILABLE_MODELS.find(m => m.id === selectedModel)?.name}
-                </p>
-                <div style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '0.75rem',
-                  width: '100%',
-                  maxWidth: '450px',
-                }}>
-                  <button
-                    onClick={() => setLessonMode('traditional')}
-                    style={{
-                      padding: '1.5rem',
-                      fontSize: '1rem',
-                      fontFamily: 'Arial, sans-serif',
-                      backgroundColor: '#fff',
-                      border: '2px solid #ddd',
-                      borderRadius: '12px',
-                      cursor: 'pointer',
-                      textAlign: 'left',
-                      transition: 'all 0.2s ease',
-                    }}
-                    onMouseEnter={(e) => {
-                      (e.currentTarget as HTMLButtonElement).style.borderColor = '#3b82f6';
-                      (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#f0f7ff';
-                    }}
-                    onMouseLeave={(e) => {
-                      (e.currentTarget as HTMLButtonElement).style.borderColor = '#ddd';
-                      (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#fff';
-                    }}
-                  >
-                    <div style={{ fontWeight: 'bold', marginBottom: '0.5rem' }}>
-                      Traditional Lesson
-                    </div>
-                    <div style={{ color: '#666', fontSize: '0.9rem' }}>
-                      Chat-based Arabic lessons with Quranic vocabulary and grammar
-                    </div>
-                  </button>
-                  <button
-                    onClick={() => setLessonMode('scenario')}
-                    style={{
-                      padding: '1.5rem',
-                      fontSize: '1rem',
-                      fontFamily: 'Arial, sans-serif',
-                      backgroundColor: '#fff',
-                      border: '2px solid #10b981',
-                      borderRadius: '12px',
-                      cursor: 'pointer',
-                      textAlign: 'left',
-                      transition: 'all 0.2s ease',
-                    }}
-                    onMouseEnter={(e) => {
-                      (e.currentTarget as HTMLButtonElement).style.borderColor = '#059669';
-                      (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#ecfdf5';
-                    }}
-                    onMouseLeave={(e) => {
-                      (e.currentTarget as HTMLButtonElement).style.borderColor = '#10b981';
-                      (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#fff';
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
-                      <span style={{ fontWeight: 'bold' }}>Visual Scenarios</span>
-                      <span style={{
-                        backgroundColor: '#10b981',
-                        color: '#fff',
-                        fontSize: '0.7rem',
-                        padding: '2px 6px',
-                        borderRadius: '4px',
-                      }}>NEW</span>
-                    </div>
-                    <div style={{ color: '#666', fontSize: '0.9rem' }}>
-                      Interactive scenes with clickable elements for contextual learning
-                    </div>
-                  </button>
-                </div>
-              </div>
-            ) : lessonMode === 'traditional' ? (
-              /* Level Selection for Traditional */
-              <div style={{
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                gap: '1rem',
-              }}>
-                <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem',
-                  marginBottom: '0.5rem',
-                }}>
-                  <button
-                    onClick={() => setLessonMode(null)}
                     style={{
                       background: 'none',
                       border: 'none',
