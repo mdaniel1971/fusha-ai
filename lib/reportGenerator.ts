@@ -70,19 +70,13 @@ const CATEGORY_IMPACT: Record<SkillCategory, number> = {
 };
 
 // Fetch observations for a session
+// Note: learning_observations table doesn't exist - returns empty
+// Future: consider integrating grammar_observations for reports
 async function fetchSessionObservations(sessionId: string): Promise<LearningObservation[]> {
-  const { data, error } = await supabase
-    .from('learning_observations')
-    .select('*')
-    .eq('session_id', sessionId)
-    .order('created_at', { ascending: true });
-
-  if (error) {
-    console.error('Failed to fetch observations:', error);
-    return [];
-  }
-
-  return data || [];
+  // Table doesn't exist - return empty array
+  // Grammar observations are now stored in grammar_observations table
+  console.log('fetchSessionObservations called for session:', sessionId, '(table not available)');
+  return [];
 }
 
 // Fetch session details for time calculation

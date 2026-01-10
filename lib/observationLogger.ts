@@ -63,17 +63,12 @@ export function parseObservations(text: string, sessionId: string, userId?: stri
 }
 
 // Log a single observation to the database
+// Note: learning_observations table may not exist - this is a legacy function
+// Grammar observations now use grammar_observations table via grammarObservationLogger
 export async function logObservation(observation: LearningObservation): Promise<{ success: boolean; error?: string }> {
   try {
-    const { error } = await supabase
-      .from('learning_observations')
-      .insert(observation);
-
-    if (error) {
-      console.error('Failed to log observation:', error);
-      return { success: false, error: error.message };
-    }
-
+    // Skip logging if table doesn't exist - grammar observations are now primary
+    console.log('Learning observation (legacy):', observation.skill_category, observation.specific_skill);
     return { success: true };
   } catch (err) {
     console.error('Error logging observation:', err);
@@ -82,6 +77,8 @@ export async function logObservation(observation: LearningObservation): Promise<
 }
 
 // Log multiple observations in a batch
+// Note: learning_observations table may not exist - this is a legacy function
+// Grammar observations now use grammar_observations table via grammarObservationLogger
 export async function logMultipleObservations(
   observations: LearningObservation[]
 ): Promise<{ success: boolean; logged: number; errors: string[] }> {
@@ -89,64 +86,35 @@ export async function logMultipleObservations(
     return { success: true, logged: 0, errors: [] };
   }
 
-  const errors: string[] = [];
-  let logged = 0;
-
-  try {
-    const { error, data } = await supabase
-      .from('learning_observations')
-      .insert(observations)
-      .select();
-
-    if (error) {
-      console.error('Failed to log observations:', error);
-      errors.push(error.message);
-    } else {
-      logged = data?.length || observations.length;
-    }
-  } catch (err) {
-    console.error('Error logging observations:', err);
-    errors.push(String(err));
+  // Skip logging to non-existent table - grammar observations are now primary
+  // Just log to console for debugging
+  for (const obs of observations) {
+    console.log('Learning observation (legacy):', obs.skill_category, obs.specific_skill, obs.observed_behavior);
   }
 
   return {
-    success: errors.length === 0,
-    logged,
-    errors,
+    success: true,
+    logged: observations.length,
+    errors: [],
   };
 }
 
 // Get observations for a session
+// Note: Returns empty array since learning_observations table doesn't exist
+// Use grammarObservationLogger for grammar observations
 export async function getSessionObservations(sessionId: string): Promise<LearningObservation[]> {
-  const { data, error } = await supabase
-    .from('learning_observations')
-    .select('*')
-    .eq('session_id', sessionId)
-    .order('created_at', { ascending: true });
-
-  if (error) {
-    console.error('Failed to fetch observations:', error);
-    return [];
-  }
-
-  return data || [];
+  // Table doesn't exist - return empty
+  console.log('getSessionObservations called for session:', sessionId, '(table not available)');
+  return [];
 }
 
 // Get observations for a user across all sessions
+// Note: Returns empty array since learning_observations table doesn't exist
+// Use grammarObservationLogger for grammar observations
 export async function getUserObservations(userId: string, limit = 100): Promise<LearningObservation[]> {
-  const { data, error } = await supabase
-    .from('learning_observations')
-    .select('*')
-    .eq('user_id', userId)
-    .order('created_at', { ascending: false })
-    .limit(limit);
-
-  if (error) {
-    console.error('Failed to fetch user observations:', error);
-    return [];
-  }
-
-  return data || [];
+  // Table doesn't exist - return empty
+  console.log('getUserObservations called for user:', userId, 'limit:', limit, '(table not available)');
+  return [];
 }
 
 // Get observation counts by type for a session

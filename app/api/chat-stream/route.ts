@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { createClient } from '@supabase/supabase-js';
 import { parseObservations, logMultipleObservations } from '@/lib/observationLogger';
+import { parseGrammarObservations, logGrammarObservations } from '@/lib/grammarObservationLogger';
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY!,
@@ -126,7 +127,19 @@ Be specific:
 Good: "subject-verb agreement with feminine plural"
 Bad: "grammar error"
 
-Include actual Arabic used. Invisible to user. Skip first greeting only.`;
+Include actual Arabic used. Invisible to user. Skip first greeting only.
+
+GRAMMAR OBSERVATION LOGGING:
+ONLY log when student makes a MISTAKE identifying part of speech. Use this format:
+[GRAM:part_of_speech|student_answer|struggling|production|student_answer|correct_answer|wrong_pos]
+
+Example: Student says "verb" when اللَّهِ is a noun:
+[GRAM:part_of_speech|verb|struggling|production|verb|noun|wrong_pos]
+
+Example: Student says "preposition" when الرَّحِيمِ is an adjective:
+[GRAM:part_of_speech|preposition|struggling|production|preposition|adjective|wrong_pos]
+
+Do NOT log correct answers. Only log mistakes. Keep it simple - one tag per mistake.`;
 
 // ===========================================
 // LEVEL-SPECIFIC PROMPTS
@@ -320,8 +333,11 @@ export async function POST(request: NextRequest) {
           const outputCost = (usage.output_tokens / 1_000_000) * pricing.output;
           const totalCost = inputCost + outputCost;
 
-          // Remove all OBS tags and markdown formatting from the complete response
-          let cleanedResponse = fullResponse.replace(/\[OBS:[^\]]+\]\s*/g, '').trim();
+          // Remove all OBS and GRAM tags and markdown formatting from the complete response
+          let cleanedResponse = fullResponse
+            .replace(/\[OBS:[^\]]+\]\s*/g, '')
+            .replace(/\[GRAM:[^\]]+\]\s*/g, '')
+            .trim();
           // Remove markdown: bold (**text**), italics (*text* or _text_), backticks, etc.
           cleanedResponse = cleanedResponse
             .replace(/\*\*(.+?)\*\*/g, '$1')  // **bold** → bold
@@ -356,10 +372,19 @@ export async function POST(request: NextRequest) {
 
           // Log observations asynchronously (don't block the response)
           if (sessionId && fullResponse) {
+            // Log general learning observations
             const { observations } = parseObservations(fullResponse, sessionId);
             if (observations.length > 0) {
               logMultipleObservations(observations).catch(err => {
                 console.error('Failed to log observations:', err);
+              });
+            }
+
+            // Log grammar-specific observations
+            const { observations: grammarObs } = parseGrammarObservations(fullResponse, sessionId);
+            if (grammarObs.length > 0) {
+              logGrammarObservations(grammarObs).catch(err => {
+                console.error('Failed to log grammar observations:', err);
               });
             }
           }

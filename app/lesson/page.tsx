@@ -263,6 +263,22 @@ export default function LessonPage() {
     { id: 3, name: 'Level 3: Advanced', description: 'Complex sentences, verb forms (I-X), passive voice, and morphology' },
   ];
 
+  // Helper to create session record in database
+  const createSessionRecord = async (sessionId: string, surahId = 1) => {
+    try {
+      const res = await fetch('/api/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: sessionId, surah_id: surahId }),
+      });
+      if (!res.ok) {
+        console.warn('Failed to create session record:', await res.text());
+      }
+    } catch (err) {
+      console.warn('Error creating session:', err);
+    }
+  };
+
   const startLesson = async (level: number) => {
     // Generate a unique session ID for tracking observations
     const newSessionId = crypto.randomUUID();
@@ -273,6 +289,9 @@ export default function LessonPage() {
     setError(null);
 
     try {
+      // Create session record in database first
+      await createSessionRecord(newSessionId, 1);
+
       await streamChat([{
         role: 'user',
         content: `Start a level ${level} lesson.`
@@ -959,9 +978,11 @@ export default function LessonPage() {
                     availableScenarios.map((scenario) => (
                       <button
                         key={scenario.id}
-                        onClick={() => {
+                        onClick={async () => {
+                          const newSessionId = crypto.randomUUID();
                           setSelectedScenarioId(scenario.id);
-                          setSessionId(crypto.randomUUID());
+                          setSessionId(newSessionId);
+                          await createSessionRecord(newSessionId, 1);
                           setLessonStarted(true);
                         }}
                         style={{
