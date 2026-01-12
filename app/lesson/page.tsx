@@ -118,7 +118,8 @@ export default function LessonPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [streamingText, setStreamingText] = useState('');
-  const [selectedLevel, setSelectedLevel] = useState<number | null>(null);
+  const [selectedSurah, setSelectedSurah] = useState<{ id: number; name: string } | null>(null);
+  const [selectedLearningMode, setSelectedLearningMode] = useState<'grammar' | 'translation' | 'mix' | null>(null);
   const [lessonStarted, setLessonStarted] = useState(false);
   const [inputText, setInputText] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -257,10 +258,16 @@ export default function LessonPage() {
     setInputText('');
   };
 
-  const levels = [
-    { id: 1, name: 'Level 1: Beginner', description: 'Translate verses and learn basic grammar (noun, verb, preposition)' },
-    { id: 2, name: 'Level 2: Intermediate', description: 'Simple scenarios with grammatical cases (nominative, accusative, genitive)' },
-    { id: 3, name: 'Level 3: Advanced', description: 'Complex sentences, verb forms (I-X), passive voice, and morphology' },
+  // Available surahs - start with just Al-Fatiha for testing
+  const availableSurahs = [
+    { id: 1, name: 'Al-Fatiha', arabicName: 'الفاتحة', verseCount: 7, description: 'The Opening - foundation of Islamic prayer' },
+  ];
+
+  // Learning mode options
+  const learningModes = [
+    { id: 'grammar' as const, name: 'Grammar', description: 'Focus on parts of speech, grammatical cases, and verb forms' },
+    { id: 'translation' as const, name: 'Translation', description: 'Focus on word meanings and translations' },
+    { id: 'mix' as const, name: 'Mixed', description: 'Alternate between grammar and translation questions' },
   ];
 
   // Helper to create session record in database
@@ -279,23 +286,24 @@ export default function LessonPage() {
     }
   };
 
-  const startLesson = async (level: number) => {
+  const startLesson = async (surah: { id: number; name: string }, learningMode: 'grammar' | 'translation' | 'mix') => {
     // Generate a unique session ID for tracking observations
     const newSessionId = crypto.randomUUID();
     setSessionId(newSessionId);
-    setSelectedLevel(level);
+    setSelectedSurah(surah);
+    setSelectedLearningMode(learningMode);
     setLessonStarted(true);
     setIsLoading(true);
     setError(null);
 
     try {
       // Create session record in database first
-      await createSessionRecord(newSessionId, 1);
+      await createSessionRecord(newSessionId, surah.id);
 
       await streamChat([{
         role: 'user',
-        content: `Start a level ${level} lesson.`
-      }], true, level, newSessionId);
+        content: `Start a lesson on ${surah.name}.`
+      }], true, surah.id, learningMode, newSessionId);
     } catch (err) {
       console.error('Failed to start lesson:', err);
       setError('Failed to start lesson. Check console for details.');
@@ -344,7 +352,7 @@ export default function LessonPage() {
   */
   // ============================================================
 
-  const streamChat = async (chatMessages: Message[], isSystemMessage = false, level?: number, overrideSessionId?: string) => {
+  const streamChat = async (chatMessages: Message[], isSystemMessage = false, surahId?: number, learningMode?: 'grammar' | 'translation' | 'mix', overrideSessionId?: string) => {
     setStreamingText('');
     setError(null);
 
@@ -354,7 +362,8 @@ export default function LessonPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           messages: chatMessages,
-          level: level || selectedLevel || 1,
+          surahId: surahId || selectedSurah?.id || 1,
+          learningMode: learningMode || selectedLearningMode || 'mix',
           sessionId: overrideSessionId || sessionId,
           model: selectedModel,
         }),
@@ -817,8 +826,8 @@ export default function LessonPage() {
                   ))}
                 </div>
               </div>
-            ) : lessonMode === null || lessonMode === 'traditional' ? (
-              /* Level Selection - shown directly after model selection */
+            ) : (lessonMode === null || lessonMode === 'traditional') && !selectedSurah ? (
+              /* Surah Selection - shown directly after model selection */
               <div style={{
                 display: 'flex',
                 flexDirection: 'column',
@@ -850,7 +859,7 @@ export default function LessonPage() {
                     margin: 0,
                     color: '#333',
                   }}>
-                    Choose your level
+                    Choose a Surah
                   </h2>
                 </div>
                 <p style={{
@@ -858,6 +867,7 @@ export default function LessonPage() {
                   color: '#666',
                   fontSize: '0.9rem',
                   marginBottom: '0.5rem',
+                  textAlign: 'center',
                 }}>
                   Using {AVAILABLE_MODELS.find(m => m.id === selectedModel)?.name}
                 </p>
@@ -868,10 +878,105 @@ export default function LessonPage() {
                   width: '100%',
                   maxWidth: '400px',
                 }}>
-                  {levels.map((level) => (
+                  {availableSurahs.map((surah) => (
                     <button
-                      key={level.id}
-                      onClick={() => startLesson(level.id)}
+                      key={surah.id}
+                      onClick={() => setSelectedSurah({ id: surah.id, name: surah.name })}
+                      style={{
+                        padding: '1.5rem',
+                        fontSize: '1rem',
+                        fontFamily: 'Arial, sans-serif',
+                        backgroundColor: '#fff',
+                        border: '2px solid #ddd',
+                        borderRadius: '12px',
+                        cursor: 'pointer',
+                        textAlign: 'left',
+                        transition: 'all 0.2s ease',
+                      }}
+                      onMouseEnter={(e) => {
+                        (e.currentTarget as HTMLButtonElement).style.borderColor = '#3b82f6';
+                        (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#f0f7ff';
+                      }}
+                      onMouseLeave={(e) => {
+                        (e.currentTarget as HTMLButtonElement).style.borderColor = '#ddd';
+                        (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#fff';
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                        <span style={{ fontWeight: 'bold' }}>{surah.name}</span>
+                        <span style={{
+                          fontFamily: "'Amiri', 'Traditional Arabic', serif",
+                          fontSize: '1.3rem',
+                          color: '#333',
+                        }}>{surah.arabicName}</span>
+                      </div>
+                      <div style={{ color: '#666', fontSize: '0.9rem' }}>
+                        {surah.description} ({surah.verseCount} verses)
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (lessonMode === null || lessonMode === 'traditional') && selectedSurah ? (
+              /* Learning Mode Selection - shown after surah selection */
+              <div style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: '1rem',
+              }}>
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  marginBottom: '0.5rem',
+                }}>
+                  <button
+                    onClick={() => setSelectedSurah(null)}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: '#3b82f6',
+                      cursor: 'pointer',
+                      fontSize: '1.5rem',
+                      padding: '0.25rem',
+                      lineHeight: 1,
+                    }}
+                  >
+                    &#8592;
+                  </button>
+                  <h2 style={{
+                    fontFamily: 'Arial, sans-serif',
+                    margin: 0,
+                    color: '#333',
+                  }}>
+                    What do you want to practice?
+                  </h2>
+                </div>
+                <p style={{
+                  fontFamily: 'Arial, sans-serif',
+                  color: '#666',
+                  fontSize: '0.9rem',
+                  marginBottom: '0.5rem',
+                  textAlign: 'center',
+                }}>
+                  <span style={{
+                    fontFamily: "'Amiri', 'Traditional Arabic', serif",
+                    fontSize: '1.2rem',
+                  }}>{availableSurahs.find(s => s.id === selectedSurah.id)?.arabicName}</span>
+                  {' '}{selectedSurah.name}
+                </p>
+                <div style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '0.75rem',
+                  width: '100%',
+                  maxWidth: '400px',
+                }}>
+                  {learningModes.map((mode) => (
+                    <button
+                      key={mode.id}
+                      onClick={() => startLesson(selectedSurah, mode.id)}
                       style={{
                         padding: '1.5rem',
                         fontSize: '1rem',
@@ -893,10 +998,10 @@ export default function LessonPage() {
                       }}
                     >
                       <div style={{ fontWeight: 'bold', marginBottom: '0.5rem' }}>
-                        {level.name}
+                        {mode.name}
                       </div>
                       <div style={{ color: '#666', fontSize: '0.9rem' }}>
-                        {level.description}
+                        {mode.description}
                       </div>
                     </button>
                   ))}
@@ -1080,6 +1185,50 @@ export default function LessonPage() {
         ) : (
           /* Traditional Lesson Mode */
           <>
+            {/* Header with back button */}
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.75rem',
+              marginBottom: '0.5rem',
+              padding: '0.5rem 0',
+            }}>
+              <button
+                onClick={() => {
+                  setLessonStarted(false);
+                  setMessages([]);
+                  setSelectedLearningMode(null);
+                  setTotalSessionCost(0);
+                  setSessionId(null);
+                }}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#3b82f6',
+                  cursor: 'pointer',
+                  fontSize: '1.5rem',
+                  padding: '0.25rem',
+                  lineHeight: 1,
+                }}
+              >
+                &#8592;
+              </button>
+              <div>
+                <span style={{
+                  fontFamily: "'Amiri', 'Traditional Arabic', serif",
+                  fontSize: '1.2rem',
+                  marginRight: '0.5rem',
+                }}>{availableSurahs.find(s => s.id === selectedSurah?.id)?.arabicName}</span>
+                <span style={{
+                  fontFamily: 'Arial, sans-serif',
+                  fontSize: '0.9rem',
+                  color: '#666',
+                }}>
+                  {selectedLearningMode === 'grammar' ? 'Grammar' : selectedLearningMode === 'translation' ? 'Translation' : 'Mixed'}
+                </span>
+              </div>
+            </div>
+
             {/* ============================================================
                 WHITEBOARD AREA - COMMENTED OUT
                 ============================================================

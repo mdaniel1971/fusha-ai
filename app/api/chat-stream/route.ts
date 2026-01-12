@@ -1,8 +1,8 @@
 import { NextRequest } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { createClient } from '@supabase/supabase-js';
-import { parseObservations, logMultipleObservations } from '@/lib/observationLogger';
 import { parseGrammarObservations, logGrammarObservations } from '@/lib/grammarObservationLogger';
+import { parseTranslationObservations, logTranslationObservations } from '@/lib/translationObservationLogger';
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY!,
@@ -13,8 +13,8 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
-// Fetch verses and words for a surah
-async function fetchSurahData(surahId: number) {
+// Fetch verses and words for a surah (up to 20 words)
+async function fetchSurahData(surahId: number, maxWords = 20) {
   const { data: verses, error: versesError } = await supabase
     .from('verses')
     .select('id, verse_number, text_arabic')
@@ -28,10 +28,11 @@ async function fetchSurahData(surahId: number) {
   const verseIds = verses.map(v => v.id);
   const { data: words } = await supabase
     .from('words')
-    .select('verse_id, word_position, text_arabic, transliteration, translation_english, part_of_speech')
+    .select('id, verse_id, word_position, text_arabic, transliteration, translation_english, part_of_speech')
     .in('verse_id', verseIds)
     .order('verse_id', { ascending: true })
-    .order('word_position', { ascending: true });
+    .order('word_position', { ascending: true })
+    .limit(maxWords);
 
   return { verses, words: words || [] };
 }
@@ -68,9 +69,9 @@ function formatScenarios(scenarios: any[]): string {
 }
 
 // ===========================================
-// META PROMPT - applies to ALL levels
+// BASE TEACHING PROMPT
 // ===========================================
-const META_PROMPT = `You are an Arabic teacher helping students learn Quranic vocabulary.
+const BASE_PROMPT = `You are an Arabic teacher helping students learn Quranic vocabulary.
 
 TONE:
 - Encouraging but measured - save enthusiasm for real breakthroughs
@@ -80,15 +81,7 @@ TONE:
 - NO MARKDOWN: Never use **, *, _, backticks, #, hyphens, or any other markdown formatting
 - No emojis, no "Today we'll..." preambles
 
-ADAPTIVE TEACHING:
-- Increase difficulty after 2-3 consecutive correct answers
-- Simplify after 2-3 struggles
-- Vary question types: translation, fill-in-blank, "how would you say...", identification, correction
-- Never repeat same format more than twice in a row
-- Build on demonstrated knowledge
-
 NATURAL USAGE:
-- Only use vocabulary in contexts where it naturally occurs
 - بِسْمِ اللَّهِ: before eating, starting tasks - NOT introductions
 - الحمد لله: gratitude, "how are you" - NOT random situations
 - Ask yourself: "Would an Arab actually say this here?"
@@ -101,12 +94,6 @@ ARABIC RECOGNITION:
 COMPOUND WORDS:
 - Accept answers identifying ANY component correctly
 - بِسْمِ = بِ (preposition) + اسْمِ (noun) - both correct
-- Response: "Right, that's the [part]. Full word is [prep] + [noun]"
-
-SCENARIOS (Levels 2-3):
-- Use provided scenarios for realistic practice
-- If none provided, create everyday contexts for natural vocabulary use
-- Build sentences appropriate to level complexity
 
 TEACHING APPROACH:
 - After student responds, give brief feedback then continue
@@ -114,130 +101,148 @@ TEACHING APPROACH:
 - Keep momentum - don't linger on explanations
 
 FIRST MESSAGE:
-"Asalaam alaikum!" then immediately start the lesson.
-
-OBSERVATION LOGGING:
-Log 1-2 observations at START of each response for vocabulary/comprehension/fluency:
-[OBS:type|category|skill|description]
-Types: strength, weakness, pattern, breakthrough
-Categories: vocabulary, comprehension, fluency (NOT grammar - use GRAM tag instead)
-Skip first greeting only.
-
-GRAMMAR MISTAKES - USE GRAM TAG (required):
-When student incorrectly identifies a part of speech, you MUST log with GRAM tag:
-[GRAM:part_of_speech|wrong_answer|struggling|production|wrong_answer|correct_answer|wrong_pos]
-
-Examples:
-- Student says "verb" for اللَّهِ (noun): [GRAM:part_of_speech|verb|struggling|production|verb|noun|wrong_pos]
-- Student says "preposition" for الرَّحِيمِ (adjective): [GRAM:part_of_speech|preposition|struggling|production|preposition|adjective|wrong_pos]
-- Student says "noun" for بِ (preposition): [GRAM:part_of_speech|noun|struggling|production|noun|preposition|wrong_pos]
-
-IMPORTANT: For grammar mistakes, ALWAYS use GRAM, never OBS.`;
+"Asalaam alaikum!" then immediately ask a question.`;
 
 // ===========================================
-// LEVEL-SPECIFIC PROMPTS
+// LEARNING MODE PROMPTS
 // ===========================================
 
-function buildLevel1Prompt(verses: any[], words: any[], surahName: string, _scenariosText: string): string {
+const GRAMMAR_MODE_PROMPT = `
+FOCUS: GRAMMAR ONLY
+Ask ONLY about grammar concepts. Do NOT ask translation questions.
+
+QUESTION TYPES:
+- "What part of speech is [word]?" (noun/verb/preposition/adjective)
+- "What grammatical case is [word] in?" (nominative/accusative/genitive)
+- "What verb form is this?" (Forms I-X)
+- "Is this active or passive voice?"
+
+ADAPTIVE DIFFICULTY:
+- Start with: part of speech (noun/ism, verb/fi'l, preposition/harf)
+- After 2-3 correct: grammatical cases (nominative/marfu', accusative/mansub, genitive/majrur)
+- After more success: verb forms (I-X), roots, passive voice
+
+LOGGING - USE GRAM TAG (required):
+When student answers a grammar question, log with GRAM tag.
+Format: [GRAM:word_id|feature|student_answer|correct_answer|correct/incorrect]
+
+The word_id is the NUMBER after "ID:" in the ANSWER KEY.
+Example: If student says "verb" but correct answer is "noun" for word ID:5:
+[GRAM:5|part_of_speech|verb|noun|incorrect]
+
+If student answers correctly:
+[GRAM:5|part_of_speech|noun|noun|correct]
+
+CRITICAL: The first value MUST be a number (the ID from answer key). Never use "undefined".
+Log EVERY grammar response.`;
+
+const TRANSLATION_MODE_PROMPT = `
+FOCUS: TRANSLATION ONLY
+Ask ONLY about word meanings. Do NOT ask grammar questions.
+
+QUESTION TYPES:
+- "What does [Arabic word] mean?"
+- "How do you say [English] in Arabic?"
+- "What word means [definition]?"
+- Fill in the blank: "الحمد means ___"
+
+ADAPTIVE DIFFICULTY:
+- Start with: simple "what does X mean?" questions
+- After 2-3 correct: reverse (English to Arabic)
+- After more success: context-based usage questions
+
+LOGGING - USE TRANS TAG (required):
+When student answers a translation question, log with TRANS tag.
+Format: [TRANS:word_id|student_answer|correct_answer|correct/incorrect]
+
+The word_id is the NUMBER after "ID:" in the ANSWER KEY.
+Example: If student says "mercy" for الرحمن (correct answer is "The Most Merciful"):
+[TRANS:3|mercy|The Most Merciful|incorrect]
+
+If student answers correctly:
+[TRANS:3|The Most Merciful|The Most Merciful|correct]
+
+CRITICAL: The first value MUST be a number (the ID from answer key). Never use "undefined".
+Log EVERY translation response.`;
+
+const MIX_MODE_PROMPT = `
+FOCUS: MIXED (50% grammar, 50% translation)
+Alternate between grammar and translation questions.
+
+GRAMMAR QUESTIONS:
+- "What part of speech is [word]?"
+- "What grammatical case is [word] in?"
+
+TRANSLATION QUESTIONS:
+- "What does [Arabic word] mean?"
+- "How do you say [English] in Arabic?"
+
+ADAPTIVE DIFFICULTY:
+- Start simple with both types
+- Increase complexity as student demonstrates competence
+- If struggling with one type, give more practice on that
+
+LOGGING - USE BOTH TAGS:
+For grammar questions, use GRAM tag:
+[GRAM:word_id|feature|student_answer|correct_answer|correct/incorrect]
+
+For translation questions, use TRANS tag:
+[TRANS:word_id|student_answer|correct_answer|correct/incorrect]
+
+CRITICAL: The first value MUST be a number (the ID from answer key). Never use "undefined".
+Log EVERY response with the appropriate tag.`;
+
+// ===========================================
+// SURAH-BASED PROMPT BUILDER
+// ===========================================
+
+type LearningMode = 'grammar' | 'translation' | 'mix';
+
+function buildSurahPrompt(verses: any[], words: any[], surahName: string, learningMode: LearningMode): string {
   const verseList = verses.map(v => `Verse ${v.verse_number}: ${v.text_arabic}`).join('\n');
 
+  // Build answer key with word IDs
   let answerKey = '';
   for (const verse of verses) {
     const verseWords = words.filter((w: any) => w.verse_id === verse.id);
     const wordDetails = verseWords.map((w: any) =>
-      `${w.text_arabic} (${w.translation_english || '?'}) [${w.part_of_speech || '?'}]`
+      `ID:${w.id} ${w.text_arabic} (${w.translation_english || '?'}) [${w.part_of_speech || '?'}]`
     ).join(' | ');
-    answerKey += `Verse ${verse.verse_number}: ${wordDetails}\n`;
+    if (wordDetails) {
+      answerKey += `Verse ${verse.verse_number}: ${wordDetails}\n`;
+    }
+  }
+
+  // Select mode-specific prompt
+  let modePrompt: string;
+  switch (learningMode) {
+    case 'grammar':
+      modePrompt = GRAMMAR_MODE_PROMPT;
+      break;
+    case 'translation':
+      modePrompt = TRANSLATION_MODE_PROMPT;
+      break;
+    case 'mix':
+    default:
+      modePrompt = MIX_MODE_PROMPT;
   }
 
   return `
-LEVEL 1: VERSE TRANSLATION & BASIC GRAMMAR
-Surah: ${surahName}
+SURAH: ${surahName}
 
 VERSES:
 ${verseList}
 
-ANSWER KEY:
+ANSWER KEY (words with IDs - use these for testing):
 ${answerKey}
 
-TASK:
-1. Show one verse in Arabic, ask: "What does this mean?"
-2. After translation, ask about a word: "What part of speech is [word]?"
+CRITICAL RULES:
+1. ONLY test words that appear in the ANSWER KEY above
+2. Each word has an ID (e.g., ID:2) - use this in your logging tags
+3. Log EVERY student response with the appropriate tag
+${modePrompt}
 
-GRAMMAR TO TEACH:
-- Noun (ism): اسم الله رب
-- Verb (fi'l): past, present, command
-- Preposition (harf): بِ مِن إلى
-
-Note: Ask about individual words from answer key (بِ, اسْم, الله), not compounds (بِسْمِ).
-
-START: Show first verse.`;
-}
-
-function buildLevel2Prompt(verses: any[], words: any[], surahName: string, scenariosText: string): string {
-  const vocabList = Array.from(new Set(words.map((w: any) =>
-    `${w.text_arabic} (${w.transliteration || '?'}) - ${w.translation_english || '?'} [${w.part_of_speech || '?'}]`
-  ))).slice(0, 15).join('\n');
-
-  const scenarioSection = scenariosText
-    ? `\nSCENARIOS:\n${scenariosText}`
-    : '';
-
-  return `
-LEVEL 2: EVERYDAY SCENARIOS & GRAMMATICAL CASES
-Surah: ${surahName}
-
-VOCABULARY:
-${vocabList}
-${scenarioSection}
-
-TASK:
-Ask students to use words in short sentences (2-4 words). Teach grammatical cases in context.
-
-GRAMMAR TO TEACH:
-- Nominative (marfu' ُ): subjects, predicates
-- Accusative (mansub َ): objects, adverbs  
-- Genitive (majrur ِ): after prepositions, in idafa
-Explain WHY a word takes its case.
-
-START: Set up first scenario.`;
-}
-
-function buildLevel3Prompt(verses: any[], words: any[], surahName: string, scenariosText: string): string {
-  const vocabList = Array.from(new Set(words.map((w: any) =>
-    `${w.text_arabic} (${w.transliteration || '?'}) - ${w.translation_english || '?'} [${w.part_of_speech || '?'}]`
-  ))).join('\n');
-
-  const scenarioSection = scenariosText
-    ? `\nSCENARIOS:\n${scenariosText}`
-    : '';
-
-  return `
-LEVEL 3: COMPLEX SENTENCES & VERB MORPHOLOGY
-Surah: ${surahName}
-
-VOCABULARY:
-${vocabList}
-${scenarioSection}
-
-TASK:
-Build longer sentences with multiple words. Test verb form identification (Forms I-X), passive voice, imperatives. Discuss root patterns.
-
-TESTING RULES:
-- Students identify roots, forms, meanings themselves
-- Do NOT provide answers in questions
-- Bad: "Root is ع-و-ن, what form?" (gives away root)
-- Good: "What's the root? What form? What does prefix add?"
-- If wrong, teach, then test with different word
-
-GRAMMAR TO TEACH:
-Forms: I (fa'ala - basic), II (fa''ala - intensive), III (faa'ala - reciprocal), IV (af'ala - causative), V (tafa''ala - reflexive), VI (tafaa'ala - mutual), VII (infa'ala - passive-like), VIII (ifta'ala - reflexive), X (istaf'ala - seeking)
-
-Passive: yu'badu vs ya'budu (is worshipped vs worships)
-Imperative: u'bud (worship!), ihdi (guide!)
-Root system: 3-letter roots generate word families
-
-START: Pick a verb, ask student to identify root, form, meaning.`;
+START: Greet the student and ask your first question.`;
 }
 
 // ===========================================
@@ -246,7 +251,7 @@ START: Pick a verb, ask student to identify root, form, meaning.`;
 
 export async function POST(request: NextRequest) {
   try {
-    const { messages, surahId = 1, level = 1, sessionId, model = 'claude-haiku-4-5-20251001', systemOverride } = await request.json();
+    const { messages, surahId = 1, sessionId, model = 'claude-haiku-4-5-20251001', learningMode = 'mix', systemOverride } = await request.json();
 
     let systemPrompt: string;
 
@@ -254,35 +259,20 @@ export async function POST(request: NextRequest) {
     if (systemOverride) {
       systemPrompt = systemOverride;
     } else {
-      // Fetch all data in parallel for standard lesson mode
-      const [surahData, scenarios, surahInfo] = await Promise.all([
-        fetchSurahData(surahId),
-        fetchScenarios(surahId),
+      // Fetch all data in parallel for standard lesson mode (up to 20 words)
+      const [surahData, surahInfo] = await Promise.all([
+        fetchSurahData(surahId, 20),
         supabase.from('surahs').select('name_english').eq('id', surahId).single()
       ]);
 
       const { verses, words } = surahData;
       const surahName = surahInfo.data?.name_english || `Surah ${surahId}`;
-      const scenariosText = formatScenarios(scenarios);
 
-      // Build level-specific prompt
-      let levelPrompt: string;
-      switch (level) {
-        case 1:
-          levelPrompt = buildLevel1Prompt(verses, words, surahName, scenariosText);
-          break;
-        case 2:
-          levelPrompt = buildLevel2Prompt(verses, words, surahName, scenariosText);
-          break;
-        case 3:
-          levelPrompt = buildLevel3Prompt(verses, words, surahName, scenariosText);
-          break;
-        default:
-          levelPrompt = buildLevel1Prompt(verses, words, surahName, scenariosText);
-      }
+      // Build surah prompt with learning mode
+      const surahPrompt = buildSurahPrompt(verses, words, surahName, learningMode as LearningMode);
 
-      // Combine meta + level prompt
-      systemPrompt = META_PROMPT + '\n' + levelPrompt;
+      // Combine base + surah prompt
+      systemPrompt = BASE_PROMPT + '\n' + surahPrompt;
     }
 
     const claudeMessages = messages.map((msg: { role: string; content: string }) => ({
@@ -326,10 +316,10 @@ export async function POST(request: NextRequest) {
           const outputCost = (usage.output_tokens / 1_000_000) * pricing.output;
           const totalCost = inputCost + outputCost;
 
-          // Remove all OBS and GRAM tags and markdown formatting from the complete response
+          // Remove all GRAM and TRANS tags and markdown formatting from the complete response
           let cleanedResponse = fullResponse
-            .replace(/\[OBS:[^\]]+\]\s*/g, '')
             .replace(/\[GRAM:[^\]]+\]\s*/g, '')
+            .replace(/\[TRANS:[^\]]+\]\s*/g, '')
             .trim();
           // Remove markdown: bold (**text**), italics (*text* or _text_), backticks, etc.
           cleanedResponse = cleanedResponse
@@ -365,21 +355,30 @@ export async function POST(request: NextRequest) {
 
           // Log observations asynchronously (don't block the response)
           if (sessionId && fullResponse) {
-            // Log general learning observations
-            const { observations } = parseObservations(fullResponse, sessionId);
-            if (observations.length > 0) {
-              logMultipleObservations(observations).catch(err => {
-                console.error('Failed to log observations:', err);
-              });
+            // Log grammar observations (GRAM tags)
+            const gramMatch = fullResponse.match(/\[GRAM:[^\]]+\]/g);
+            if (gramMatch) {
+              console.log('Raw GRAM tags found:', gramMatch);
+              const { observations: grammarObs } = parseGrammarObservations(fullResponse, sessionId);
+              console.log('GRAM tags parsed:', grammarObs.length);
+              if (grammarObs.length > 0) {
+                logGrammarObservations(grammarObs).catch((err: Error) => {
+                  console.error('Failed to log grammar observations:', err);
+                });
+              }
             }
 
-            // Log grammar-specific observations
-            const { observations: grammarObs } = parseGrammarObservations(fullResponse, sessionId);
-            console.log('GRAM tags parsed:', grammarObs.length, grammarObs.length > 0 ? JSON.stringify(grammarObs) : '(none)');
-            if (grammarObs.length > 0) {
-              logGrammarObservations(grammarObs).catch(err => {
-                console.error('Failed to log grammar observations:', err);
-              });
+            // Log translation observations (TRANS tags)
+            const transMatch = fullResponse.match(/\[TRANS:[^\]]+\]/g);
+            if (transMatch) {
+              console.log('Raw TRANS tags found:', transMatch);
+              const { observations: transObs } = parseTranslationObservations(fullResponse, sessionId);
+              console.log('TRANS tags parsed:', transObs.length);
+              if (transObs.length > 0) {
+                logTranslationObservations(transObs).catch((err: Error) => {
+                  console.error('Failed to log translation observations:', err);
+                });
+              }
             }
           }
 

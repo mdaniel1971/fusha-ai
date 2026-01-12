@@ -1,41 +1,33 @@
 import { supabase } from './supabase';
 
-// Types matching the database schema
-export type PerformanceLevel = 'mastered' | 'emerging' | 'struggling';
-export type ContextType = 'production' | 'correction_accepted' | 'correction_rejected';
-
+// Grammar observation - tracks student answers on grammar questions
 export interface GrammarObservation {
   session_id: string;
   user_id?: string;
   word_id?: number;
-  grammar_feature: string;
-  grammar_value: string;
-  performance_level: PerformanceLevel;
-  context_type: ContextType;
-  student_attempt?: string;
-  correct_form?: string;
-  error_type?: string;
+  grammar_feature: string;  // 'part_of_speech', 'case', 'verb_form', etc.
+  student_answer: string;   // What the student said
+  correct_answer: string;   // What it should be
+  is_correct: boolean;      // Whether the answer was correct
 }
 
-// Grammar features we track (matching words table columns)
+// Grammar features we track
 export const GRAMMAR_FEATURES = [
-  'verb_form',      // Form I, II, III, IV, V, VI, VII, VIII, IX, X
-  'person',         // first_person, second_person, third_person
-  'number',         // singular, dual, plural
-  'gender',         // masculine, feminine
-  'grammatical_case', // nominative, accusative, genitive
-  'verb_mood',      // indicative, subjunctive, jussive, imperative
-  'verb_tense',     // past, present, future
-  'verb_voice',     // active, passive
   'part_of_speech', // noun, verb, particle, adjective, etc.
+  'grammatical_case', // nominative, accusative, genitive
+  'verb_form',      // Form I, II, III, IV, V, VI, VII, VIII, IX, X
+  'verb_tense',     // past, present
+  'verb_voice',     // active, passive
+  'gender',         // masculine, feminine
+  'number',         // singular, dual, plural
 ] as const;
 
 export type GrammarFeature = typeof GRAMMAR_FEATURES[number];
 
 // Regex to extract grammar observations from Claude's response
-// Format: [GRAM:feature|value|level|context|attempt|correct|error_type]
-// Example: [GRAM:verb_tense|past|mastered|production|ذَهَبْتُ||]
-const GRAM_REGEX = /\[GRAM:([^|]+)\|([^|]+)\|([^|]+)\|([^|]+)\|([^|]*)\|([^|]*)\|([^\]]*)\]/g;
+// Format: [GRAM:word_id|feature|student_answer|correct_answer|correct/incorrect]
+// Example: [GRAM:42|part_of_speech|verb|noun|incorrect]
+const GRAM_REGEX = /\[GRAM:(\d+)\|([^|]+)\|([^|]+)\|([^|]+)\|(correct|incorrect)\]/g;
 
 // Parse grammar observation tags from Claude's response
 export function parseGrammarObservations(
@@ -53,30 +45,16 @@ export function parseGrammarObservations(
   GRAM_REGEX.lastIndex = 0;
 
   while ((match = GRAM_REGEX.exec(text)) !== null) {
-    const [, feature, value, level, context, attempt, correct, errorType] = match;
-
-    // Validate performance level
-    if (!['mastered', 'emerging', 'struggling'].includes(level)) {
-      console.warn(`Invalid performance level: ${level}`);
-      continue;
-    }
-
-    // Validate context type
-    if (!['production', 'correction_accepted', 'correction_rejected', 'identification'].includes(context)) {
-      console.warn(`Invalid context type: ${context}`);
-      continue;
-    }
+    const [, wordId, feature, studentAnswer, correctAnswer, result] = match;
 
     observations.push({
       session_id: sessionId,
       user_id: userId,
+      word_id: parseInt(wordId, 10),
       grammar_feature: feature.trim(),
-      grammar_value: value.trim(),
-      performance_level: level as PerformanceLevel,
-      context_type: context as ContextType,
-      student_attempt: attempt?.trim() || undefined,
-      correct_form: correct?.trim() || undefined,
-      error_type: errorType?.trim() || undefined,
+      student_answer: studentAnswer.trim(),
+      correct_answer: correctAnswer.trim(),
+      is_correct: result === 'correct',
     });
   }
 
@@ -121,88 +99,130 @@ export async function logGrammarObservations(
   };
 }
 
-// Get struggling grammar features for a user
-export async function getStrugglingFeatures(
-  userId: string,
-  limit = 10
-): Promise<{ feature: string; value: string; count: number }[]> {
-  const { data, error } = await supabase
+// Get mistake counts by grammar feature
+export async function getMistakesByFeature(
+  sessionId?: string,
+  userId?: string
+): Promise<{ feature: string; count: number }[]> {
+  let query = supabase
     .from('grammar_observations')
-    .select('grammar_feature, grammar_value')
-    .eq('user_id', userId)
-    .eq('performance_level', 'struggling')
-    .order('created_at', { ascending: false })
-    .limit(100);
+    .select('grammar_feature');
+
+  if (sessionId) {
+    query = query.eq('session_id', sessionId);
+  }
+  if (userId) {
+    query = query.eq('user_id', userId);
+  }
+
+  const { data, error } = await query;
 
   if (error || !data) {
-    console.error('Failed to fetch struggling features:', error);
+    console.error('Failed to fetch mistakes by feature:', error);
     return [];
   }
 
-  // Count occurrences of each feature+value combination
+  // Count by feature
   const counts = new Map<string, number>();
   for (const row of data) {
-    const key = `${row.grammar_feature}|${row.grammar_value}`;
+    counts.set(row.grammar_feature, (counts.get(row.grammar_feature) || 0) + 1);
+  }
+
+  return Array.from(counts.entries())
+    .map(([feature, count]) => ({ feature, count }))
+    .sort((a, b) => b.count - a.count);
+}
+
+// Get commonly confused pairs (student_answer -> correct_answer)
+export async function getConfusedPairs(
+  userId?: string,
+  limit = 10
+): Promise<{ studentAnswer: string; correctAnswer: string; count: number }[]> {
+  let query = supabase
+    .from('grammar_observations')
+    .select('student_answer, correct_answer');
+
+  if (userId) {
+    query = query.eq('user_id', userId);
+  }
+
+  const { data, error } = await query.limit(100);
+
+  if (error || !data) {
+    console.error('Failed to fetch confused pairs:', error);
+    return [];
+  }
+
+  // Count pairs
+  const counts = new Map<string, number>();
+  for (const row of data) {
+    const key = `${row.student_answer}|${row.correct_answer}`;
     counts.set(key, (counts.get(key) || 0) + 1);
   }
 
-  // Sort by count and return top results
   return Array.from(counts.entries())
     .map(([key, count]) => {
-      const [feature, value] = key.split('|');
-      return { feature, value, count };
+      const [studentAnswer, correctAnswer] = key.split('|');
+      return { studentAnswer, correctAnswer, count };
     })
     .sort((a, b) => b.count - a.count)
     .slice(0, limit);
 }
 
-// Get mastered words for a user (to exclude from drills)
-export async function getMasteredWordIds(userId: string): Promise<number[]> {
-  const { data, error } = await supabase
+// Get words that were answered incorrectly (for drill targeting)
+export async function getMistakenWordIds(
+  sessionId?: string,
+  userId?: string
+): Promise<number[]> {
+  let query = supabase
     .from('grammar_observations')
     .select('word_id')
-    .eq('user_id', userId)
-    .eq('performance_level', 'mastered')
+    .eq('is_correct', false)
     .not('word_id', 'is', null);
 
+  if (sessionId) {
+    query = query.eq('session_id', sessionId);
+  }
+  if (userId) {
+    query = query.eq('user_id', userId);
+  }
+
+  const { data, error } = await query;
+
   if (error || !data) {
-    console.error('Failed to fetch mastered words:', error);
+    console.error('Failed to fetch mistaken words:', error);
     return [];
   }
 
   return Array.from(new Set(data.map(d => d.word_id).filter(Boolean))) as number[];
 }
 
-// Get grammar feature statistics for a user
-export async function getGrammarStats(userId: string): Promise<{
-  feature: string;
-  mastered: number;
-  emerging: number;
-  struggling: number;
-}[]> {
-  const { data, error } = await supabase
+// Get grammar accuracy stats
+export async function getGrammarStats(
+  sessionId?: string,
+  userId?: string
+): Promise<{ total: number; correct: number; accuracy: number }> {
+  let query = supabase
     .from('grammar_observations')
-    .select('grammar_feature, performance_level')
-    .eq('user_id', userId);
+    .select('is_correct');
+
+  if (sessionId) {
+    query = query.eq('session_id', sessionId);
+  }
+  if (userId) {
+    query = query.eq('user_id', userId);
+  }
+
+  const { data, error } = await query;
 
   if (error || !data) {
     console.error('Failed to fetch grammar stats:', error);
-    return [];
+    return { total: 0, correct: 0, accuracy: 0 };
   }
 
-  // Group by feature and count performance levels
-  const stats = new Map<string, { mastered: number; emerging: number; struggling: number }>();
+  const total = data.length;
+  const correct = data.filter(d => d.is_correct).length;
+  const accuracy = total > 0 ? (correct / total) * 100 : 0;
 
-  for (const row of data) {
-    if (!stats.has(row.grammar_feature)) {
-      stats.set(row.grammar_feature, { mastered: 0, emerging: 0, struggling: 0 });
-    }
-    const featureStats = stats.get(row.grammar_feature)!;
-    featureStats[row.performance_level as PerformanceLevel]++;
-  }
-
-  return Array.from(stats.entries()).map(([feature, counts]) => ({
-    feature,
-    ...counts,
-  }));
+  return { total, correct, accuracy };
 }
