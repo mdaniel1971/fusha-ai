@@ -117,29 +117,22 @@ FIRST MESSAGE:
 "Asalaam alaikum!" then immediately start the lesson.
 
 OBSERVATION LOGGING:
-Log 2-4 observations at START of each response:
+Log 1-2 observations at START of each response for vocabulary/comprehension/fluency:
 [OBS:type|category|skill|description]
+Types: strength, weakness, pattern, breakthrough
+Categories: vocabulary, comprehension, fluency (NOT grammar - use GRAM tag instead)
+Skip first greeting only.
 
-Types: strength, weakness, pattern (2+ times), breakthrough
-Categories: vocabulary, grammar, pronunciation, comprehension, fluency
+GRAMMAR MISTAKES - USE GRAM TAG (required):
+When student incorrectly identifies a part of speech, you MUST log with GRAM tag:
+[GRAM:part_of_speech|wrong_answer|struggling|production|wrong_answer|correct_answer|wrong_pos]
 
-Be specific:
-Good: "subject-verb agreement with feminine plural"
-Bad: "grammar error"
+Examples:
+- Student says "verb" for اللَّهِ (noun): [GRAM:part_of_speech|verb|struggling|production|verb|noun|wrong_pos]
+- Student says "preposition" for الرَّحِيمِ (adjective): [GRAM:part_of_speech|preposition|struggling|production|preposition|adjective|wrong_pos]
+- Student says "noun" for بِ (preposition): [GRAM:part_of_speech|noun|struggling|production|noun|preposition|wrong_pos]
 
-Include actual Arabic used. Invisible to user. Skip first greeting only.
-
-GRAMMAR OBSERVATION LOGGING:
-ONLY log when student makes a MISTAKE identifying part of speech. Use this format:
-[GRAM:part_of_speech|student_answer|struggling|production|student_answer|correct_answer|wrong_pos]
-
-Example: Student says "verb" when اللَّهِ is a noun:
-[GRAM:part_of_speech|verb|struggling|production|verb|noun|wrong_pos]
-
-Example: Student says "preposition" when الرَّحِيمِ is an adjective:
-[GRAM:part_of_speech|preposition|struggling|production|preposition|adjective|wrong_pos]
-
-Do NOT log correct answers. Only log mistakes. Keep it simple - one tag per mistake.`;
+IMPORTANT: For grammar mistakes, ALWAYS use GRAM, never OBS.`;
 
 // ===========================================
 // LEVEL-SPECIFIC PROMPTS
@@ -382,6 +375,7 @@ export async function POST(request: NextRequest) {
 
             // Log grammar-specific observations
             const { observations: grammarObs } = parseGrammarObservations(fullResponse, sessionId);
+            console.log('GRAM tags parsed:', grammarObs.length, grammarObs.length > 0 ? JSON.stringify(grammarObs) : '(none)');
             if (grammarObs.length > 0) {
               logGrammarObservations(grammarObs).catch(err => {
                 console.error('Failed to log grammar observations:', err);
