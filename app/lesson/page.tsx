@@ -2,7 +2,6 @@
 
 import { useState, useRef, useEffect } from 'react';
 import LearningReport from '@/components/LearningReport';
-import ScenarioView from '@/components/ScenarioView';
 
 // ============================================================
 // VOICE FEATURES - CURRENTLY DISABLED
@@ -112,14 +111,13 @@ const AVAILABLE_MODELS: ModelOption[] = [
   },
 ];
 
-type LessonMode = 'traditional' | 'scenario';
-
 export default function LessonPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [streamingText, setStreamingText] = useState('');
   const [selectedSurah, setSelectedSurah] = useState<{ id: number; name: string } | null>(null);
   const [selectedLearningMode, setSelectedLearningMode] = useState<'grammar' | 'translation' | 'mix' | null>(null);
+  const [selectedLevel, setSelectedLevel] = useState<number | null>(null);
   const [lessonStarted, setLessonStarted] = useState(false);
   const [inputText, setInputText] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -129,10 +127,6 @@ export default function LessonPage() {
   const [modelChosen, setModelChosen] = useState(false);
   const [totalSessionCost, setTotalSessionCost] = useState(0);
   const [lastUsage, setLastUsage] = useState<TokenUsage | null>(null);
-  const [lessonMode, setLessonMode] = useState<LessonMode | null>(null);
-  const [selectedScenarioId, setSelectedScenarioId] = useState<number | null>(null);
-  const [scenarioEditMode, setScenarioEditMode] = useState(false);
-  const [availableScenarios, setAvailableScenarios] = useState<Array<{id: number; title: string; setup_arabic: string; setup_english: string}>>([]);
 
   // ============================================================
   // WHITEBOARD STATE - COMMENTED OUT
@@ -156,20 +150,6 @@ export default function LessonPage() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, streamingText]);
-
-  // Fetch available scenarios when scenario mode is selected
-  useEffect(() => {
-    if (lessonMode === 'scenario' && availableScenarios.length === 0) {
-      fetch('/api/scenarios')
-        .then(res => res.json())
-        .then(data => {
-          if (data.scenarios) {
-            setAvailableScenarios(data.scenarios);
-          }
-        })
-        .catch(err => console.error('Failed to fetch scenarios:', err));
-    }
-  }, [lessonMode, availableScenarios.length]);
 
   // Inject CSS for contentEditable styling and animations (client-side only to avoid hydration mismatch)
   useEffect(() => {
@@ -270,6 +250,36 @@ export default function LessonPage() {
     { id: 'mix' as const, name: 'Mixed', description: 'Alternate between grammar and translation questions' },
   ];
 
+  // Difficulty levels with descriptions for each mode
+  const grammarLevels = [
+    { level: 1, name: 'Level 1: Parts of Speech', description: 'Identify nouns, verbs, particles, and prepositions' },
+    { level: 2, name: 'Level 2: Grammatical Cases', description: 'Nominative (marfu\'), accusative (mansub), genitive (majrur)' },
+    { level: 3, name: 'Level 3: Verb Forms', description: 'Identify verb forms I-X (e.g. fa\'ala, fa\'\'ala, af\'ala)' },
+    { level: 4, name: 'Level 4: Roots & Voice', description: 'Extract 3-letter roots and identify active/passive voice' },
+  ];
+
+  const translationLevels = [
+    { level: 1, name: 'Level 1: Single Words', description: 'Translate individual Arabic words to English' },
+    { level: 2, name: 'Level 2: Reverse Translation', description: 'Translate English to Arabic' },
+    { level: 3, name: 'Level 3: Two-Word Phrases', description: 'Translate short phrases from the verses' },
+    { level: 4, name: 'Level 4: Full Phrases', description: 'Translate longer phrases and clauses' },
+  ];
+
+  const mixedLevels = [
+    { level: 1, name: 'Level 1: Basics', description: 'Single word translations + parts of speech' },
+    { level: 2, name: 'Level 2: Intermediate', description: 'Reverse translation + grammatical cases' },
+    { level: 3, name: 'Level 3: Advanced', description: 'Phrases + verb forms (I-X)' },
+    { level: 4, name: 'Level 4: Expert', description: 'Complex phrases + roots & voice' },
+  ];
+
+  const getLevelsForMode = (mode: 'grammar' | 'translation' | 'mix') => {
+    switch (mode) {
+      case 'grammar': return grammarLevels;
+      case 'translation': return translationLevels;
+      case 'mix': return mixedLevels;
+    }
+  };
+
   // Helper to create session record in database
   const createSessionRecord = async (sessionId: string, surahId = 1) => {
     try {
@@ -286,12 +296,13 @@ export default function LessonPage() {
     }
   };
 
-  const startLesson = async (surah: { id: number; name: string }, learningMode: 'grammar' | 'translation' | 'mix') => {
+  const startLesson = async (surah: { id: number; name: string }, learningMode: 'grammar' | 'translation' | 'mix', level: number) => {
     // Generate a unique session ID for tracking observations
     const newSessionId = crypto.randomUUID();
     setSessionId(newSessionId);
     setSelectedSurah(surah);
     setSelectedLearningMode(learningMode);
+    setSelectedLevel(level);
     setLessonStarted(true);
     setIsLoading(true);
     setError(null);
@@ -303,7 +314,7 @@ export default function LessonPage() {
       await streamChat([{
         role: 'user',
         content: `Start a lesson on ${surah.name}.`
-      }], true, surah.id, learningMode, newSessionId);
+      }], true, surah.id, learningMode, newSessionId, level);
     } catch (err) {
       console.error('Failed to start lesson:', err);
       setError('Failed to start lesson. Check console for details.');
@@ -352,7 +363,7 @@ export default function LessonPage() {
   */
   // ============================================================
 
-  const streamChat = async (chatMessages: Message[], isSystemMessage = false, surahId?: number, learningMode?: 'grammar' | 'translation' | 'mix', overrideSessionId?: string) => {
+  const streamChat = async (chatMessages: Message[], isSystemMessage = false, surahId?: number, learningMode?: 'grammar' | 'translation' | 'mix', overrideSessionId?: string, level?: number) => {
     setStreamingText('');
     setError(null);
 
@@ -366,6 +377,7 @@ export default function LessonPage() {
           learningMode: learningMode || selectedLearningMode || 'mix',
           sessionId: overrideSessionId || sessionId,
           model: selectedModel,
+          startLevel: level || selectedLevel || 1,
         }),
       });
 
@@ -826,7 +838,7 @@ export default function LessonPage() {
                   ))}
                 </div>
               </div>
-            ) : (lessonMode === null || lessonMode === 'traditional') && !selectedSurah ? (
+            ) : !selectedSurah ? (
               /* Surah Selection - shown directly after model selection */
               <div style={{
                 display: 'flex',
@@ -917,7 +929,7 @@ export default function LessonPage() {
                   ))}
                 </div>
               </div>
-            ) : (lessonMode === null || lessonMode === 'traditional') && selectedSurah ? (
+            ) : selectedSurah && !selectedLearningMode ? (
               /* Learning Mode Selection - shown after surah selection */
               <div style={{
                 display: 'flex',
@@ -976,7 +988,7 @@ export default function LessonPage() {
                   {learningModes.map((mode) => (
                     <button
                       key={mode.id}
-                      onClick={() => startLesson(selectedSurah, mode.id)}
+                      onClick={() => setSelectedLearningMode(mode.id)}
                       style={{
                         padding: '1.5rem',
                         fontSize: '1rem',
@@ -1007,8 +1019,8 @@ export default function LessonPage() {
                   ))}
                 </div>
               </div>
-            ) : (
-              /* Scenario Selection */
+            ) : selectedSurah && selectedLearningMode ? (
+              /* Level Selection - shown after learning mode selection */
               <div style={{
                 display: 'flex',
                 flexDirection: 'column',
@@ -1022,7 +1034,7 @@ export default function LessonPage() {
                   marginBottom: '0.5rem',
                 }}>
                   <button
-                    onClick={() => setLessonMode(null)}
+                    onClick={() => setSelectedLearningMode(null)}
                     style={{
                       background: 'none',
                       border: 'none',
@@ -1040,7 +1052,7 @@ export default function LessonPage() {
                     margin: 0,
                     color: '#333',
                   }}>
-                    Choose a scenario
+                    Choose your level
                   </h2>
                 </div>
                 <p style={{
@@ -1048,139 +1060,76 @@ export default function LessonPage() {
                   color: '#666',
                   fontSize: '0.9rem',
                   marginBottom: '0.5rem',
+                  textAlign: 'center',
                 }}>
-                  Using {AVAILABLE_MODELS.find(m => m.id === selectedModel)?.name}
+                  {selectedLearningMode === 'grammar' ? 'Grammar' : selectedLearningMode === 'translation' ? 'Translation' : 'Mixed'} practice on{' '}
+                  <span style={{
+                    fontFamily: "'Amiri', 'Traditional Arabic', serif",
+                    fontSize: '1.2rem',
+                  }}>{availableSurahs.find(s => s.id === selectedSurah.id)?.arabicName}</span>
                 </p>
-                {/* Edit mode toggle */}
-                <label style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem',
-                  fontSize: '0.85rem',
-                  fontFamily: 'Arial, sans-serif',
-                  color: '#666',
-                  cursor: 'pointer',
+                {/* Answer format hint */}
+                <div style={{
+                  backgroundColor: '#f0f7ff',
+                  border: '1px solid #bfdbfe',
+                  borderRadius: '8px',
+                  padding: '0.75rem 1rem',
+                  marginBottom: '0.5rem',
+                  maxWidth: '400px',
+                  width: '100%',
                 }}>
-                  <input
-                    type="checkbox"
-                    checked={scenarioEditMode}
-                    onChange={(e) => setScenarioEditMode(e.target.checked)}
-                  />
-                  Edit mode (place hotspots)
-                </label>
+                  <p style={{
+                    fontFamily: 'Arial, sans-serif',
+                    color: '#1e40af',
+                    fontSize: '0.85rem',
+                    margin: 0,
+                    lineHeight: 1.5,
+                  }}>
+                    <strong>Tip:</strong> Arabic answers can be in Arabic script or transliteration. Grammar terms can be in English or Arabic (e.g., nominative/marfu', genitive/majrur).
+                  </p>
+                </div>
                 <div style={{
                   display: 'flex',
                   flexDirection: 'column',
                   gap: '0.75rem',
                   width: '100%',
-                  maxWidth: '450px',
+                  maxWidth: '400px',
                 }}>
-                  {availableScenarios.length === 0 ? (
-                    <p style={{ textAlign: 'center', color: '#666', fontFamily: 'Arial, sans-serif' }}>
-                      Loading scenarios...
-                    </p>
-                  ) : (
-                    availableScenarios.map((scenario) => (
-                      <button
-                        key={scenario.id}
-                        onClick={async () => {
-                          const newSessionId = crypto.randomUUID();
-                          setSelectedScenarioId(scenario.id);
-                          setSessionId(newSessionId);
-                          await createSessionRecord(newSessionId, 1);
-                          setLessonStarted(true);
-                        }}
-                        style={{
-                          padding: '1.5rem',
-                          fontSize: '1rem',
-                          fontFamily: 'Arial, sans-serif',
-                          backgroundColor: '#fff',
-                          border: '2px solid #10b981',
-                          borderRadius: '12px',
-                          cursor: 'pointer',
-                          textAlign: 'left',
-                          transition: 'all 0.2s ease',
-                        }}
-                        onMouseEnter={(e) => {
-                          (e.currentTarget as HTMLButtonElement).style.borderColor = '#059669';
-                          (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#ecfdf5';
-                        }}
-                        onMouseLeave={(e) => {
-                          (e.currentTarget as HTMLButtonElement).style.borderColor = '#10b981';
-                          (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#fff';
-                        }}
-                      >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                          <span style={{ fontWeight: 'bold' }}>{scenario.title}</span>
-                          <span style={{
-                            fontFamily: "'Amiri', serif",
-                            fontSize: '1.1rem',
-                            color: '#333',
-                          }}>{scenario.setup_arabic}</span>
-                        </div>
-                        <div style={{ color: '#666', fontSize: '0.9rem' }}>
-                          {scenario.setup_english}
-                        </div>
-                      </button>
-                    ))
-                  )}
+                  {getLevelsForMode(selectedLearningMode).map((levelOption) => (
+                    <button
+                      key={levelOption.level}
+                      onClick={() => startLesson(selectedSurah, selectedLearningMode, levelOption.level)}
+                      style={{
+                        padding: '1.25rem',
+                        fontSize: '1rem',
+                        fontFamily: 'Arial, sans-serif',
+                        backgroundColor: '#fff',
+                        border: '2px solid #ddd',
+                        borderRadius: '12px',
+                        cursor: 'pointer',
+                        textAlign: 'left',
+                        transition: 'all 0.2s ease',
+                      }}
+                      onMouseEnter={(e) => {
+                        (e.currentTarget as HTMLButtonElement).style.borderColor = '#3b82f6';
+                        (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#f0f7ff';
+                      }}
+                      onMouseLeave={(e) => {
+                        (e.currentTarget as HTMLButtonElement).style.borderColor = '#ddd';
+                        (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#fff';
+                      }}
+                    >
+                      <div style={{ fontWeight: 'bold', marginBottom: '0.25rem' }}>
+                        {levelOption.name}
+                      </div>
+                      <div style={{ color: '#666', fontSize: '0.85rem' }}>
+                        {levelOption.description}
+                      </div>
+                    </button>
+                  ))}
                 </div>
               </div>
-            )}
-          </div>
-        ) : selectedScenarioId ? (
-          /* Scenario Mode */
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-            <ScenarioView
-              scenarioId={selectedScenarioId}
-              editMode={scenarioEditMode}
-            />
-            {/* Bottom bar for scenario mode */}
-            <div style={{
-              padding: '0.5rem 1rem',
-              backgroundColor: '#fff',
-              borderTop: '1px solid #eee',
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-            }}>
-              <div style={{
-                padding: '0.5rem 0.75rem',
-                backgroundColor: '#f8f8f8',
-                borderRadius: '8px',
-                fontSize: '0.75rem',
-                fontFamily: 'monospace',
-                color: '#666',
-                display: 'flex',
-                gap: '1rem',
-                alignItems: 'center',
-              }}>
-                {scenarioEditMode && (
-                  <span style={{ color: '#3b82f6', fontWeight: 'bold' }}>EDIT MODE</span>
-                )}
-                <span>Scenario #{selectedScenarioId}</span>
-              </div>
-              <button
-                onClick={() => {
-                  setLessonStarted(false);
-                  setSelectedScenarioId(null);
-                  setLessonMode(null);
-                  setTotalSessionCost(0);
-                }}
-                style={{
-                  padding: '0.5rem 1rem',
-                  fontSize: '0.875rem',
-                  fontFamily: 'Arial, sans-serif',
-                  backgroundColor: 'transparent',
-                  color: '#666',
-                  border: '1px solid #ddd',
-                  borderRadius: '8px',
-                  cursor: 'pointer',
-                }}
-              >
-                Exit Scenario
-              </button>
-            </div>
+            ) : null}
           </div>
         ) : (
           /* Traditional Lesson Mode */
@@ -1198,6 +1147,7 @@ export default function LessonPage() {
                   setLessonStarted(false);
                   setMessages([]);
                   setSelectedLearningMode(null);
+                  setSelectedLevel(null);
                   setTotalSessionCost(0);
                   setSessionId(null);
                 }}
@@ -1235,15 +1185,21 @@ export default function LessonPage() {
             {renderWhiteboard()}
             ============================================================ */}
 
-            {/* Chat messages */}
+            {/* Chat area with tip sidebar */}
             <div style={{
               flex: 1,
-              overflowY: 'auto',
-              padding: '1rem',
-              backgroundColor: '#f8f9fa',
-              borderRadius: '8px',
-              marginBottom: '1rem',
+              display: 'flex',
+              gap: '1rem',
+              minHeight: 0,
             }}>
+              {/* Chat messages */}
+              <div style={{
+                flex: 1,
+                overflowY: 'auto',
+                padding: '1rem',
+                backgroundColor: '#f8f9fa',
+                borderRadius: '8px',
+              }}>
               {isLoading && messages.length === 0 && !streamingText && (
                 <div style={{ 
                   textAlign: 'center', 
@@ -1351,8 +1307,32 @@ export default function LessonPage() {
                 </div>
               )}
               ============================================================ */}
-              
+
               <div ref={messagesEndRef} />
+              </div>
+
+              {/* Tip sidebar */}
+              <div style={{
+                width: '200px',
+                flexShrink: 0,
+                backgroundColor: '#f0f7ff',
+                border: '1px solid #bfdbfe',
+                borderRadius: '8px',
+                padding: '1rem',
+                alignSelf: 'flex-start',
+                position: 'sticky',
+                top: 0,
+              }}>
+                <p style={{
+                  fontFamily: 'Arial, sans-serif',
+                  color: '#1e40af',
+                  fontSize: '0.8rem',
+                  margin: 0,
+                  lineHeight: 1.5,
+                }}>
+                  <strong>Tip:</strong> Arabic answers can be in Arabic script or transliteration. Grammar terms can be in English or Arabic (e.g., nominative/marfu', genitive/majrur).
+                </p>
+              </div>
             </div>
 
             {/* Text input */}

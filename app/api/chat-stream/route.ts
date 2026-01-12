@@ -37,37 +37,6 @@ async function fetchSurahData(surahId: number, maxWords = 20) {
   return { verses, words: words || [] };
 }
 
-// Fetch scenarios for a surah (via lessons table)
-async function fetchScenarios(surahId: number) {
-  const { data: lesson } = await supabase
-    .from('lessons')
-    .select('id')
-    .eq('surah_id', surahId)
-    .single();
-
-  if (!lesson) return [];
-
-  const { data: scenarios } = await supabase
-    .from('scenarios')
-    .select('title, setup_english, setup_arabic, context')
-    .eq('lesson_id', lesson.id);
-
-  return scenarios || [];
-}
-
-// Format scenarios for the prompt
-function formatScenarios(scenarios: any[]): string {
-  if (!scenarios.length) return '';
-
-  return scenarios.map((s, i) => {
-    let entry = `${i + 1}. ${s.title}`;
-    entry += `\n   Setup: ${s.setup_english}`;
-    if (s.setup_arabic) entry += `\n   Arabic: ${s.setup_arabic}`;
-    if (s.context) entry += `\n   Context: ${s.context}`;
-    return entry;
-  }).join('\n\n');
-}
-
 // ===========================================
 // BASE TEACHING PROMPT
 // ===========================================
@@ -104,93 +73,103 @@ FIRST MESSAGE:
 "Asalaam alaikum!" then immediately ask a question.`;
 
 // ===========================================
-// LEARNING MODE PROMPTS
+// META PROMPT - COMMON RULES FOR ALL MODES
+// ===========================================
+
+const META_PROMPT = `
+ABSOLUTE RULE - ANSWER KEY ONLY:
+You may ONLY ask about words that appear in the ANSWER KEY above.
+- ONLY use words from this surah's answer key - no exceptions
+- If a word isn't listed in the answer key, you cannot ask about it
+- Do not invent translations or grammar - use exactly what the answer key provides
+
+ANSWER FORMAT FLEXIBILITY:
+- Accept Arabic in script OR transliteration (الحمد or alhamd)
+- Accept grammar terms in English OR Arabic (nominative/marfu', genitive/majrur, accusative/mansub)
+- Accept synonyms and close meanings
+
+GRAMMAR CONTEXT RULE:
+When asking grammar questions, ALWAYS provide the phrase context:
+- BAD: "What case is اللَّهِ in?"
+- GOOD: "In بِسْمِ اللَّهِ, what case is اللَّهِ in?"
+
+LOGGING TAGS (required for every student response):
+Grammar: [GRAM:word_id|feature|student_answer|correct_answer|correct/incorrect]
+Translation: [TRANS:word_id|student_answer|correct_answer|correct/incorrect]
+- word_id = the NUMBER after "ID:" in answer key (e.g., ID:5 → use 5)
+- feature = part_of_speech, grammatical_case, verb_form, root, or voice`;
+
+// ===========================================
+// LEVEL-SPECIFIC INSTRUCTIONS
+// ===========================================
+
+const GRAMMAR_LEVELS: Record<number, string> = {
+  1: `LEVEL 1: PARTS OF SPEECH
+Ask ONLY: "In [phrase], what part of speech is [word]?"
+Answers: noun, verb, particle, preposition (use [part_of_speech] from answer key)
+Do NOT ask about cases, verb forms, or roots at this level.`,
+
+  2: `LEVEL 2: GRAMMATICAL CASES
+Ask ONLY: "In [phrase], what grammatical case is [word] in?"
+Answers:
+- nominative (مرفوع/marfu') - subject, predicate
+- accusative (منصوب/mansub) - object, after إن
+- genitive (مجرور/majrur) - after preposition, in idafa
+Do NOT ask about verb forms or roots at this level.`,
+
+  3: `LEVEL 3: VERB FORMS (I-X)
+Ask ONLY: "What form (I-X) is [verb]?" for verbs in the answer key
+Form I (فَعَلَ): basic | Form II (فَعَّلَ): doubled middle | Form III (فَاعَلَ): alif after 1st
+Form IV (أَفْعَلَ): hamza prefix | Form V (تَفَعَّلَ): ta + doubled | Form VI (تَفَاعَلَ): ta + alif
+Form VII (اِنْفَعَلَ): in prefix | Form VIII (اِفْتَعَلَ): infixed ta | Form X (اِسْتَفْعَلَ): ista prefix
+Do NOT ask about roots or voice at this level.`,
+
+  4: `LEVEL 4: ROOTS AND VOICE
+Ask about:
+- "What is the 3-letter root of [word]?" (e.g., ح-م-د for الحمد)
+- "Is [verb] active or passive voice?" (مَعْلُوم/ma'lum or مَجْهُول/majhul)
+This is the most advanced grammar level.`
+};
+
+const TRANSLATION_LEVELS: Record<number, string> = {
+  1: `LEVEL 1: SINGLE WORDS (Arabic → English)
+Ask ONLY: "What does [Arabic word] mean?"
+Use single words from the answer key.
+Accept answers matching or close to the (translation) in answer key.`,
+
+  2: `LEVEL 2: REVERSE TRANSLATION (English → Arabic)
+Ask ONLY: "How do you say [English] in Arabic?" or "Which word means [definition]?"
+Use translations from the answer key, student provides Arabic word.`,
+
+  3: `LEVEL 3: TWO-WORD PHRASES
+Ask ONLY about 2 consecutive words from a verse.
+Example: "What does بِسْمِ اللَّهِ mean?"
+Build expected answer from both words' translations in answer key.`,
+
+  4: `LEVEL 4: FULL PHRASES
+Ask about 3+ word sequences from the verses.
+Example: "Translate: الْحَمْدُ لِلَّهِ رَبِّ الْعَالَمِينَ"
+Build expected answer by combining translations from answer key.`
+};
+
+// ===========================================
+// MODE-SPECIFIC PROMPTS
 // ===========================================
 
 const GRAMMAR_MODE_PROMPT = `
-FOCUS: GRAMMAR ONLY
-Ask ONLY about grammar concepts. Do NOT ask translation questions.
-
-QUESTION TYPES:
-- "What part of speech is [word]?" (noun/verb/preposition/adjective)
-- "What grammatical case is [word] in?" (nominative/accusative/genitive)
-- "What verb form is this?" (Forms I-X)
-- "Is this active or passive voice?"
-
-ADAPTIVE DIFFICULTY:
-- Start with: part of speech (noun/ism, verb/fi'l, preposition/harf)
-- After 2-3 correct: grammatical cases (nominative/marfu', accusative/mansub, genitive/majrur)
-- After more success: verb forms (I-X), roots, passive voice
-
-LOGGING - USE GRAM TAG (required):
-When student answers a grammar question, log with GRAM tag.
-Format: [GRAM:word_id|feature|student_answer|correct_answer|correct/incorrect]
-
-The word_id is the NUMBER after "ID:" in the ANSWER KEY.
-Example: If student says "verb" but correct answer is "noun" for word ID:5:
-[GRAM:5|part_of_speech|verb|noun|incorrect]
-
-If student answers correctly:
-[GRAM:5|part_of_speech|noun|noun|correct]
-
-CRITICAL: The first value MUST be a number (the ID from answer key). Never use "undefined".
-Log EVERY grammar response.`;
+MODE: GRAMMAR ONLY
+Ask ONLY grammar questions. Do NOT ask translation questions.
+Use [GRAM:...] tags for logging.`;
 
 const TRANSLATION_MODE_PROMPT = `
-FOCUS: TRANSLATION ONLY
-Ask ONLY about word meanings. Do NOT ask grammar questions.
-
-QUESTION TYPES:
-- "What does [Arabic word] mean?"
-- "How do you say [English] in Arabic?"
-- "What word means [definition]?"
-- Fill in the blank: "الحمد means ___"
-
-ADAPTIVE DIFFICULTY:
-- Start with: simple "what does X mean?" questions
-- After 2-3 correct: reverse (English to Arabic)
-- After more success: context-based usage questions
-
-LOGGING - USE TRANS TAG (required):
-When student answers a translation question, log with TRANS tag.
-Format: [TRANS:word_id|student_answer|correct_answer|correct/incorrect]
-
-The word_id is the NUMBER after "ID:" in the ANSWER KEY.
-Example: If student says "mercy" for الرحمن (correct answer is "The Most Merciful"):
-[TRANS:3|mercy|The Most Merciful|incorrect]
-
-If student answers correctly:
-[TRANS:3|The Most Merciful|The Most Merciful|correct]
-
-CRITICAL: The first value MUST be a number (the ID from answer key). Never use "undefined".
-Log EVERY translation response.`;
+MODE: TRANSLATION ONLY
+Ask ONLY translation questions. Do NOT ask grammar questions.
+Use [TRANS:...] tags for logging.`;
 
 const MIX_MODE_PROMPT = `
-FOCUS: MIXED (50% grammar, 50% translation)
-Alternate between grammar and translation questions.
-
-GRAMMAR QUESTIONS:
-- "What part of speech is [word]?"
-- "What grammatical case is [word] in?"
-
-TRANSLATION QUESTIONS:
-- "What does [Arabic word] mean?"
-- "How do you say [English] in Arabic?"
-
-ADAPTIVE DIFFICULTY:
-- Start simple with both types
-- Increase complexity as student demonstrates competence
-- If struggling with one type, give more practice on that
-
-LOGGING - USE BOTH TAGS:
-For grammar questions, use GRAM tag:
-[GRAM:word_id|feature|student_answer|correct_answer|correct/incorrect]
-
-For translation questions, use TRANS tag:
-[TRANS:word_id|student_answer|correct_answer|correct/incorrect]
-
-CRITICAL: The first value MUST be a number (the ID from answer key). Never use "undefined".
-Log EVERY response with the appropriate tag.`;
+MODE: MIXED (alternate grammar and translation)
+Alternate between grammar and translation questions each turn.
+Use [GRAM:...] for grammar, [TRANS:...] for translation.`;
 
 // ===========================================
 // SURAH-BASED PROMPT BUILDER
@@ -198,7 +177,7 @@ Log EVERY response with the appropriate tag.`;
 
 type LearningMode = 'grammar' | 'translation' | 'mix';
 
-function buildSurahPrompt(verses: any[], words: any[], surahName: string, learningMode: LearningMode): string {
+function buildSurahPrompt(verses: any[], words: any[], surahName: string, learningMode: LearningMode, startLevel: number = 1): string {
   const verseList = verses.map(v => `Verse ${v.verse_number}: ${v.text_arabic}`).join('\n');
 
   // Build answer key with word IDs
@@ -213,18 +192,26 @@ function buildSurahPrompt(verses: any[], words: any[], surahName: string, learni
     }
   }
 
-  // Select mode-specific prompt
+  // Select mode-specific prompt and level instructions
   let modePrompt: string;
+  let levelInstructions: string;
+
   switch (learningMode) {
     case 'grammar':
       modePrompt = GRAMMAR_MODE_PROMPT;
+      levelInstructions = GRAMMAR_LEVELS[startLevel] || GRAMMAR_LEVELS[1];
       break;
     case 'translation':
       modePrompt = TRANSLATION_MODE_PROMPT;
+      levelInstructions = TRANSLATION_LEVELS[startLevel] || TRANSLATION_LEVELS[1];
       break;
     case 'mix':
     default:
       modePrompt = MIX_MODE_PROMPT;
+      // For mix mode, combine both level instructions
+      const gramLevel = GRAMMAR_LEVELS[startLevel] || GRAMMAR_LEVELS[1];
+      const transLevel = TRANSLATION_LEVELS[startLevel] || TRANSLATION_LEVELS[1];
+      levelInstructions = `FOR GRAMMAR QUESTIONS:\n${gramLevel}\n\nFOR TRANSLATION QUESTIONS:\n${transLevel}`;
   }
 
   return `
@@ -233,16 +220,16 @@ SURAH: ${surahName}
 VERSES:
 ${verseList}
 
-ANSWER KEY (words with IDs - use these for testing):
+ANSWER KEY (YOUR ONLY SOURCE - DO NOT INVENT WORDS):
 ${answerKey}
-
-CRITICAL RULES:
-1. ONLY test words that appear in the ANSWER KEY above
-2. Each word has an ID (e.g., ID:2) - use this in your logging tags
-3. Log EVERY student response with the appropriate tag
+FORMAT: ID:number Arabic_word (English_translation) [part_of_speech]
+${META_PROMPT}
 ${modePrompt}
 
-START: Greet the student and ask your first question.`;
+YOUR CURRENT LEVEL:
+${levelInstructions}
+
+START: Greet the student and ask your first question at this level.`;
 }
 
 // ===========================================
@@ -251,29 +238,22 @@ START: Greet the student and ask your first question.`;
 
 export async function POST(request: NextRequest) {
   try {
-    const { messages, surahId = 1, sessionId, model = 'claude-haiku-4-5-20251001', learningMode = 'mix', systemOverride } = await request.json();
+    const { messages, surahId = 1, sessionId, model = 'claude-haiku-4-5-20251001', learningMode = 'mix', startLevel = 1 } = await request.json();
 
-    let systemPrompt: string;
+    // Fetch all data in parallel (up to 20 words)
+    const [surahData, surahInfo] = await Promise.all([
+      fetchSurahData(surahId, 20),
+      supabase.from('surahs').select('name_english').eq('id', surahId).single()
+    ]);
 
-    // If systemOverride is provided, use it directly (for scenario mode)
-    if (systemOverride) {
-      systemPrompt = systemOverride;
-    } else {
-      // Fetch all data in parallel for standard lesson mode (up to 20 words)
-      const [surahData, surahInfo] = await Promise.all([
-        fetchSurahData(surahId, 20),
-        supabase.from('surahs').select('name_english').eq('id', surahId).single()
-      ]);
+    const { verses, words } = surahData;
+    const surahName = surahInfo.data?.name_english || `Surah ${surahId}`;
 
-      const { verses, words } = surahData;
-      const surahName = surahInfo.data?.name_english || `Surah ${surahId}`;
+    // Build surah prompt with learning mode and starting level
+    const surahPrompt = buildSurahPrompt(verses, words, surahName, learningMode as LearningMode, startLevel);
 
-      // Build surah prompt with learning mode
-      const surahPrompt = buildSurahPrompt(verses, words, surahName, learningMode as LearningMode);
-
-      // Combine base + surah prompt
-      systemPrompt = BASE_PROMPT + '\n' + surahPrompt;
-    }
+    // Combine base + surah prompt
+    const systemPrompt = BASE_PROMPT + '\n' + surahPrompt;
 
     const claudeMessages = messages.map((msg: { role: string; content: string }) => ({
       role: msg.role as 'user' | 'assistant',
@@ -354,6 +334,7 @@ export async function POST(request: NextRequest) {
           controller.enqueue(encoder.encode(`data: ${usageData}\n\n`));
 
           // Log observations asynchronously (don't block the response)
+          console.log('Checking for tags - sessionId:', sessionId, 'responseLength:', fullResponse.length);
           if (sessionId && fullResponse) {
             // Log grammar observations (GRAM tags)
             const gramMatch = fullResponse.match(/\[GRAM:[^\]]+\]/g);
