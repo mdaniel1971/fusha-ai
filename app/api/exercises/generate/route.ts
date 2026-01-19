@@ -1,21 +1,15 @@
 import { supabase } from '@/lib/supabase';
 import Anthropic from '@anthropic-ai/sdk';
+import { getClaudeWordPool, getFlashcardWords, getExerciseOrder, SurahPart } from '@/lib/exercise-vocab';
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
 interface GenerateRequest {
-  exercise_template_id: string;
-  surah_ids: number[];
+  surah_parts: SurahPart[];  // Array of {surah_id, surah_part}
+  exercise_name: string;
   user_id?: string;
-}
-
-interface VocabWord {
-  arabic: string;
-  english: string;
-  word_type: string;
-  surahs: number[];
 }
 
 interface GeneratedSentence {
@@ -27,137 +21,89 @@ interface GeneratedSentence {
 export async function POST(request: Request) {
   try {
     const body: GenerateRequest = await request.json();
-    const { exercise_template_id, surah_ids, user_id } = body;
+    const { surah_parts, exercise_name, user_id } = body;
 
     // Validation
-    if (!exercise_template_id || !surah_ids || surah_ids.length === 0) {
+    if (!surah_parts || surah_parts.length === 0 || !exercise_name) {
       return new Response(
-        JSON.stringify({ error: 'Missing required fields: exercise_template_id and surah_ids' }),
+        JSON.stringify({ error: 'Missing required fields: surah_parts and exercise_name' }),
         { status: 400, headers: { 'Content-Type': 'application/json' } }
       );
     }
 
-    // Step 1: Fetch exercise template
-    const { data: template, error: templateError } = await supabase
-      .from('exercise_templates')
-      .select('*')
-      .eq('id', exercise_template_id)
-      .single();
-
-    if (templateError || !template) {
+    // Step 1: Get exercise order for cumulative word pool
+    const exerciseOrder = await getExerciseOrder(exercise_name);
+    if (exerciseOrder === null) {
       return new Response(
-        JSON.stringify({ error: 'Exercise template not found', details: templateError?.message }),
+        JSON.stringify({ error: 'Exercise not found', details: exercise_name }),
         { status: 404, headers: { 'Content-Type': 'application/json' } }
       );
     }
 
-    // Step 2: Fetch vocabulary from selected surahs
-    // IMPORTANT: Exclude verse_number = 0 which contains placeholder/scenario vocabulary
-    const { data: verses, error: versesError } = await supabase
-      .from('verses')
-      .select('id, surah_id, verse_number')
-      .in('surah_id', surah_ids)
-      .gt('verse_number', 0);  // Exclude placeholder verses (verse_number = 0)
+    // Step 2: Get vocabulary
+    // Flashcard words = Quran words + THIS exercise's supporting words only
+    const flashcardWords = await getFlashcardWords(surah_parts, exercise_name);
 
-    if (versesError || !verses || verses.length === 0) {
+    // Claude word pool = Quran words + ALL supporting words from exercises 1 through current (cumulative)
+    const claudeWordPool = await getClaudeWordPool(surah_parts, exerciseOrder);
+
+    if (claudeWordPool.length === 0) {
       return new Response(
-        JSON.stringify({ error: 'No verses found for selected surahs', details: versesError?.message }),
+        JSON.stringify({ error: 'No vocabulary found for selected surah parts and exercise' }),
         { status: 404, headers: { 'Content-Type': 'application/json' } }
       );
     }
 
-    // Filter out any verse with id = 0 as well (extra safety)
-    const verseIds = verses.filter(v => v.id !== 0).map(v => v.id);
-
-    // Fetch words from these verses
-    const { data: words, error: wordsError } = await supabase
-      .from('words')
-      .select('text_arabic, translation_english, part_of_speech, verse_id')
-      .in('verse_id', verseIds);
-
-    if (wordsError || !words || words.length === 0) {
-      return new Response(
-        JSON.stringify({ error: 'No vocabulary found for selected surahs', details: wordsError?.message }),
-        { status: 404, headers: { 'Content-Type': 'application/json' } }
-      );
-    }
-
-    // Process vocabulary: deduplicate and group by surah
-    const vocabMap = new Map<string, VocabWord>();
-
-    words.forEach((word) => {
-      const key = word.text_arabic;
-      const verse = verses.find(v => v.id === word.verse_id);
-      const surahId = verse?.surah_id;
-
-      if (!surahId) return;
-
-      if (vocabMap.has(key)) {
-        const existing = vocabMap.get(key)!;
-        if (!existing.surahs.includes(surahId)) {
-          existing.surahs.push(surahId);
-        }
-      } else {
-        vocabMap.set(key, {
-          arabic: word.text_arabic,
-          english: word.translation_english,
-          word_type: word.part_of_speech || 'unknown',
-          surahs: [surahId],
-        });
-      }
-    });
-
-    const vocabulary = Array.from(vocabMap.values());
-
-    // Limit to ~50 most useful words if list is very long
-    const limitedVocab = vocabulary.slice(0, 50);
-
-    if (limitedVocab.length === 0) {
-      return new Response(
-        JSON.stringify({ error: 'No valid vocabulary extracted from selected surahs' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
-      );
-    }
+    // Separate Quran words and supporting words for the prompt
+    const quranWords = claudeWordPool.filter(w => w.source === 'quran');
+    const supportingWords = claudeWordPool.filter(w => w.source === 'supporting');
 
     // Step 3: Construct prompt for Claude
-    // Format vocabulary as a clear reference list
-    const vocabList = limitedVocab
-      .map((v, idx) => `${idx + 1}. ${v.arabic} = "${v.english}" [${v.word_type}]`)
-      .join('\n');
+    const quranWordsList = quranWords.length > 0
+      ? quranWords.map((v, idx) => `${idx + 1}. ${v.arabic} = "${v.english}" [${v.word_type}]`).join('\n')
+      : '(No Quran words selected)';
 
-    // Create a simple Arabic-only list for emphasis
-    const arabicOnlyList = limitedVocab.map(v => v.arabic).join(' | ');
+    const supportingWordsList = supportingWords.length > 0
+      ? supportingWords.map((v, idx) => `${idx + 1}. ${v.arabic} = "${v.english}" [${v.word_type}]`).join('\n')
+      : '(No supporting words available)';
+
+    // All Arabic words combined for reference
+    const allArabicWords = claudeWordPool.map(v => v.arabic).join(' | ');
 
     const prompt = `You are creating Arabic translation exercises for Quranic vocabulary learning.
 
 CRITICAL CONSTRAINT - THIS IS MANDATORY:
-You may ONLY use Arabic words from this exact vocabulary list. Do NOT use ANY Arabic words that are not in this list.
+Generate sentences using ONLY these words. Never create new Arabic words.
 
-ALLOWED VOCABULARY (${limitedVocab.length} words total):
-${vocabList}
+QURAN WORDS (${quranWords.length} words):
+${quranWordsList}
 
-ARABIC WORDS YOU CAN USE (copy exactly as written with their tashkeel):
-${arabicOnlyList}
+SUPPORTING WORDS (${supportingWords.length} words):
+${supportingWordsList}
+
+ALL ARABIC WORDS YOU CAN USE (copy exactly as written with their tashkeel):
+${allArabicWords}
 
 You may also use these common words:
 - Pronouns: أنا، أنت، أنتِ، هو، هي، نحن، أنتم، هم، هُوَ، هِيَ
 - Conjunction: و (and)
+- Preposition: في، من، إلى، على، ب، ل
 - The definite article ال is already included in words that have it
 
-GRAMMAR PATTERN: ${template.grammar_pattern}
+EXERCISE: ${exercise_name}
 
-INSTRUCTIONS: ${template.grammar_instructions}
+INSTRUCTIONS: Create nominal sentences (جملة اسمية) using مُبْتَدَأ + خَبَر pattern. Include variety: some with و (and), some with pronouns, some definite/indefinite. Progress from simple 2-3 word sentences to slightly more complex 4-5 word sentences. All must include proper tashkeel. Use natural, grammatically correct Arabic.
 
 STRICT REQUIREMENTS:
-1. Create exactly ${template.sentence_count} sentences
-2. EVERY Arabic word in your sentences MUST come from the vocabulary list above (except pronouns and و)
+1. Create exactly 10 sentences
+2. EVERY Arabic word in your sentences MUST come from the vocabulary lists above (except pronouns, و, and basic prepositions)
 3. Do NOT invent or add any new Arabic words - this is critical
 4. Copy the Arabic words exactly as they appear in the vocabulary (with their exact tashkeel)
 5. Each sentence must be grammatically correct
 6. Progress from simple (2-3 words) to more complex (4-5 words)
 7. English translations must be accurate and natural
 
-VALIDATION CHECK: Before outputting, verify that EVERY Arabic word (except pronouns/و) appears exactly in the vocabulary list above. If a word is not in the list, do not use it.
+VALIDATION CHECK: Before outputting, verify that EVERY Arabic word (except pronouns/و/prepositions) appears exactly in the vocabulary lists above. If a word is not in the list, do not use it.
 
 Return ONLY a valid JSON array (no markdown, no explanations):
 [
@@ -200,7 +146,7 @@ Return ONLY a valid JSON array (no markdown, no explanations):
         generatedSentences = JSON.parse(cleanedText);
 
         // Validate structure
-        if (!Array.isArray(generatedSentences) || generatedSentences.length !== template.sentence_count) {
+        if (!Array.isArray(generatedSentences) || generatedSentences.length !== 10) {
           throw new Error('Invalid response structure or incorrect sentence count');
         }
 
@@ -238,10 +184,11 @@ Return ONLY a valid JSON array (no markdown, no explanations):
     const { data: instance, error: instanceError } = await supabase
       .from('exercise_instances')
       .insert({
-        exercise_template_id,
         user_id: user_id || null,
-        surah_ids,
+        surah_ids: surah_parts.map(sp => sp.surah_id),
         generated_sentences: generatedSentences,
+        // Store exercise metadata
+        exercise_template_id: null, // No longer using templates table for this
       })
       .select()
       .single();
@@ -257,23 +204,26 @@ Return ONLY a valid JSON array (no markdown, no explanations):
     }
 
     // Step 6: Return the instance_id and vocabulary used
-    // Log for debugging
-    console.log(`[Exercise Generate] Surah IDs: ${surah_ids.join(', ')}`);
-    console.log(`[Exercise Generate] Found ${verses.length} verses, ${words.length} words`);
-    console.log(`[Exercise Generate] Unique vocabulary: ${limitedVocab.length} words`);
-    console.log(`[Exercise Generate] Vocabulary sample: ${limitedVocab.slice(0, 5).map(v => v.arabic).join(', ')}`);
+    console.log(`[Exercise Generate] Surah Parts: ${surah_parts.map(sp => `${sp.surah_id}-${sp.surah_part}`).join(', ')}`);
+    console.log(`[Exercise Generate] Exercise: ${exercise_name} (order: ${exerciseOrder})`);
+    console.log(`[Exercise Generate] Claude word pool: ${claudeWordPool.length} words (${quranWords.length} Quran + ${supportingWords.length} supporting)`);
+    console.log(`[Exercise Generate] Flashcard words: ${flashcardWords.length} words`);
 
     return new Response(
       JSON.stringify({
         success: true,
         instance_id: instance.id,
-        vocabulary: limitedVocab,
+        flashcard_vocabulary: flashcardWords,  // For flashcards (current exercise only)
+        claude_vocabulary: claudeWordPool,      // For reference (cumulative)
         sentence_count: generatedSentences.length,
+        exercise_name,
+        exercise_order: exerciseOrder,
         debug: {
-          surah_ids_queried: surah_ids,
-          verses_found: verses.length,
-          words_found: words.length,
-          unique_vocab_count: limitedVocab.length,
+          surah_parts_queried: surah_parts,
+          quran_words_count: quranWords.length,
+          supporting_words_count: supportingWords.length,
+          total_claude_pool: claudeWordPool.length,
+          flashcard_words_count: flashcardWords.length,
         },
       }),
       { status: 200, headers: { 'Content-Type': 'application/json' } }

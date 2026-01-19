@@ -1,21 +1,21 @@
 'use client';
 
 import { useState } from 'react';
-import { ALL_SURAHS } from '@/lib/surahs-data';
 
 interface VocabWord {
   arabic: string;
   english: string;
   word_type: string;
-  surahs: number[];
+  source?: 'quran' | 'supporting';
 }
 
 interface VocabFlashcardsProps {
   vocabulary: VocabWord[];
   onComplete: () => void;
+  exerciseName?: string;
 }
 
-export default function VocabFlashcards({ vocabulary, onComplete }: VocabFlashcardsProps) {
+export default function VocabFlashcards({ vocabulary, onComplete, exerciseName }: VocabFlashcardsProps) {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
 
@@ -32,6 +32,10 @@ export default function VocabFlashcards({ vocabulary, onComplete }: VocabFlashca
 
   const currentWord = vocabulary[currentIndex];
   const totalWords = vocabulary.length;
+
+  // Count words by source
+  const quranWordsCount = vocabulary.filter(w => w.source === 'quran').length;
+  const supportingWordsCount = vocabulary.filter(w => w.source === 'supporting').length;
 
   const handleNext = () => {
     if (currentIndex < totalWords - 1) {
@@ -51,22 +55,40 @@ export default function VocabFlashcards({ vocabulary, onComplete }: VocabFlashca
     setIsFlipped(!isFlipped);
   };
 
-  const getSurahNames = (surahIds: number[]) => {
-    return surahIds
-      .map((id) => {
-        const surah = ALL_SURAHS.find((s) => s.id === id);
-        return surah ? surah.transliteration : `Surah ${id}`;
-      })
-      .join(', ');
+  const getSourceLabel = (source?: string) => {
+    if (source === 'quran') return 'Quran Vocabulary';
+    if (source === 'supporting') return 'Supporting Word';
+    return 'Vocabulary';
+  };
+
+  const getSourceColor = (source?: string) => {
+    if (source === 'quran') return '#22c55e';
+    if (source === 'supporting') return '#3b82f6';
+    return '#6b7280';
   };
 
   return (
     <div style={styles.container}>
       <div style={styles.header}>
         <h1 style={styles.title}>Study the Vocabulary</h1>
+        {exerciseName && (
+          <div style={styles.exerciseName}>{exerciseName}</div>
+        )}
         <p style={styles.subtitle}>
           Review these words before starting the translation exercise
         </p>
+        <div style={styles.wordCounts}>
+          {quranWordsCount > 0 && (
+            <span style={{ ...styles.wordCountBadge, backgroundColor: '#dcfce7', color: '#166534' }}>
+              {quranWordsCount} Quran words
+            </span>
+          )}
+          {supportingWordsCount > 0 && (
+            <span style={{ ...styles.wordCountBadge, backgroundColor: '#dbeafe', color: '#1e40af' }}>
+              {supportingWordsCount} Supporting words
+            </span>
+          )}
+        </div>
       </div>
 
       <div style={styles.progressBar}>
@@ -101,6 +123,14 @@ export default function VocabFlashcards({ vocabulary, onComplete }: VocabFlashca
             }}
           >
             <div style={styles.flipHint}>Click to flip</div>
+            <div
+              style={{
+                ...styles.sourceBadge,
+                backgroundColor: getSourceColor(currentWord.source),
+              }}
+            >
+              {getSourceLabel(currentWord.source)}
+            </div>
             <div style={styles.arabicText}>{currentWord.arabic}</div>
           </div>
 
@@ -117,8 +147,13 @@ export default function VocabFlashcards({ vocabulary, onComplete }: VocabFlashca
             <div style={styles.wordType}>
               <strong>Type:</strong> {currentWord.word_type}
             </div>
-            <div style={styles.surahInfo}>
-              <strong>Found in:</strong> {getSurahNames(currentWord.surahs)}
+            <div
+              style={{
+                ...styles.sourceInfo,
+                color: getSourceColor(currentWord.source),
+              }}
+            >
+              {getSourceLabel(currentWord.source)}
             </div>
           </div>
         </div>
@@ -181,9 +216,27 @@ const styles: { [key: string]: React.CSSProperties } = {
     color: '#1a1a1a',
     marginBottom: '0.5rem',
   },
+  exerciseName: {
+    fontSize: '1.2rem',
+    color: '#3b82f6',
+    fontWeight: 'bold',
+    marginBottom: '0.5rem',
+  },
   subtitle: {
     fontSize: '1.1rem',
     color: '#6b7280',
+    marginBottom: '1rem',
+  },
+  wordCounts: {
+    display: 'flex',
+    gap: '0.75rem',
+    justifyContent: 'center',
+  },
+  wordCountBadge: {
+    padding: '0.25rem 0.75rem',
+    borderRadius: '12px',
+    fontSize: '0.85rem',
+    fontWeight: 'bold',
   },
   progressBar: {
     width: '100%',
@@ -246,6 +299,16 @@ const styles: { [key: string]: React.CSSProperties } = {
     fontSize: '0.85rem',
     color: '#9ca3af',
   },
+  sourceBadge: {
+    position: 'absolute' as const,
+    top: '1rem',
+    right: '1rem',
+    padding: '0.25rem 0.75rem',
+    borderRadius: '12px',
+    fontSize: '0.75rem',
+    fontWeight: 'bold',
+    color: '#fff',
+  },
   arabicText: {
     fontSize: '3.5rem',
     fontFamily: "'Amiri', 'Traditional Arabic', serif",
@@ -264,11 +327,10 @@ const styles: { [key: string]: React.CSSProperties } = {
     color: '#6b7280',
     marginTop: '1rem',
   },
-  surahInfo: {
+  sourceInfo: {
     fontSize: '0.95rem',
-    color: '#6b7280',
     marginTop: '0.5rem',
-    textAlign: 'center' as const,
+    fontWeight: 'bold',
   },
   navigation: {
     display: 'flex',
