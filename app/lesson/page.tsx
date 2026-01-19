@@ -125,6 +125,7 @@ export default function LessonPage() {
   const [showReport, setShowReport] = useState(false);
   const [selectedModel, setSelectedModel] = useState<string>('');
   const [modelChosen, setModelChosen] = useState(false);
+  const [modeChosen, setModeChosen] = useState(false);
   const [totalSessionCost, setTotalSessionCost] = useState(0);
   const [lastUsage, setLastUsage] = useState<TokenUsage | null>(null);
 
@@ -838,8 +839,118 @@ export default function LessonPage() {
                   ))}
                 </div>
               </div>
+            ) : !modeChosen ? (
+              /* Mode Selection - shown after model selection */
+              <div style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: '1rem',
+              }}>
+                <h2 style={{
+                  fontFamily: 'Arial, sans-serif',
+                  marginBottom: '0.5rem',
+                  color: '#333',
+                  fontSize: '1.8rem',
+                }}>
+                  Choose Your Learning Mode
+                </h2>
+                <p style={{
+                  fontFamily: 'Arial, sans-serif',
+                  color: '#666',
+                  fontSize: '1rem',
+                  marginBottom: '1rem',
+                  textAlign: 'center',
+                  maxWidth: '500px',
+                }}>
+                  Select how you want to learn Arabic today
+                </p>
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: '1fr 1fr',
+                  gap: '1.5rem',
+                  width: '100%',
+                  maxWidth: '700px',
+                }}>
+                  <button
+                    onClick={() => setModeChosen(true)}
+                    style={{
+                      padding: '2rem',
+                      fontSize: '1.1rem',
+                      fontFamily: 'Arial, sans-serif',
+                      backgroundColor: '#fff',
+                      border: '2px solid #ddd',
+                      borderRadius: '16px',
+                      cursor: 'pointer',
+                      textAlign: 'center',
+                      transition: 'all 0.2s ease',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      gap: '1rem',
+                    }}
+                    onMouseEnter={(e) => {
+                      (e.currentTarget as HTMLButtonElement).style.borderColor = '#3b82f6';
+                      (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#f0f7ff';
+                      (e.currentTarget as HTMLButtonElement).style.transform = 'translateY(-4px)';
+                    }}
+                    onMouseLeave={(e) => {
+                      (e.currentTarget as HTMLButtonElement).style.borderColor = '#ddd';
+                      (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#fff';
+                      (e.currentTarget as HTMLButtonElement).style.transform = 'translateY(0)';
+                    }}
+                  >
+                    <div style={{ fontSize: '2.5rem' }}>💬</div>
+                    <div style={{ fontWeight: 'bold', fontSize: '1.3rem' }}>
+                      Diagnostic Chat
+                    </div>
+                    <div style={{ color: '#666', fontSize: '0.95rem' }}>
+                      Interactive lessons with AI tutor for grammar and translation practice
+                    </div>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      window.location.href = '/lessons';
+                    }}
+                    style={{
+                      padding: '2rem',
+                      fontSize: '1.1rem',
+                      fontFamily: 'Arial, sans-serif',
+                      backgroundColor: '#fff',
+                      border: '2px solid #ddd',
+                      borderRadius: '16px',
+                      cursor: 'pointer',
+                      textAlign: 'center',
+                      transition: 'all 0.2s ease',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      gap: '1rem',
+                    }}
+                    onMouseEnter={(e) => {
+                      (e.currentTarget as HTMLButtonElement).style.borderColor = '#22c55e';
+                      (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#f0fdf4';
+                      (e.currentTarget as HTMLButtonElement).style.transform = 'translateY(-4px)';
+                    }}
+                    onMouseLeave={(e) => {
+                      (e.currentTarget as HTMLButtonElement).style.borderColor = '#ddd';
+                      (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#fff';
+                      (e.currentTarget as HTMLButtonElement).style.transform = 'translateY(0)';
+                    }}
+                  >
+                    <div style={{ fontSize: '2.5rem' }}>📚</div>
+                    <div style={{ fontWeight: 'bold', fontSize: '1.3rem' }}>
+                      Lessons
+                    </div>
+                    <div style={{ color: '#666', fontSize: '0.95rem' }}>
+                      Structured translation exercises using Quranic vocabulary
+                    </div>
+                  </button>
+                </div>
+              </div>
             ) : !selectedSurah ? (
-              /* Surah Selection - shown directly after model selection */
+              /* Surah Selection - shown after mode selection */
               <div style={{
                 display: 'flex',
                 flexDirection: 'column',

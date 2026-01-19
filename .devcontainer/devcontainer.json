@@ -1,0 +1,50 @@
+{
+  "name": "FushaAI Development",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "bradlc.vscode-tailwindcss",
+        "Supabase.supabase-vscode",
+        "Anthropic.claude-code"
+      ],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "esbenp.prettier-vscode"
+      }
+    }
+  },
+
+  "forwardPorts": [3000, 54321, 54322, 54323, 54324],
+  "portsAttributes": {
+    "3000": {
+      "label": "Next.js App",
+      "onAutoForward": "notify"
+    },
+    "54321": {
+      "label": "Supabase API",
+      "onAutoForward": "silent"
+    }
+  },
+
+  "postCreateCommand": "npm install",
+
+  "remoteEnv": {
+    "NODE_ENV": "development"
+  },
+
+  "remoteUser": "node",
+
+  "runArgs": ["--init"],
+
+  "mounts": [
+    "source=${localEnv:HOME}/.anthropic,target=/home/node/.anthropic,type=bind,consistency=cached",
+    "source=${localEnv:HOME}/.claude,target=/home/node/.claude,type=bind,consistency=cached"
+  ]
+}
