@@ -143,7 +143,7 @@ export default function ProgressPage() {
           Start a lesson to begin tracking your grammar progress.
         </p>
         <Link
-          href="/lesson"
+          href="/learn"
           style={{
             padding: '0.75rem 1.5rem',
             fontSize: '1rem',
@@ -230,7 +230,7 @@ export default function ProgressPage() {
           Grammar Progress
         </h1>
         <Link
-          href="/drills"
+          href="/learn"
           style={{
             fontFamily: 'Arial, sans-serif',
             color: '#3b82f6',
@@ -238,7 +238,7 @@ export default function ProgressPage() {
             fontSize: '0.9rem',
           }}
         >
-          Practice →
+          Learn →
         </Link>
       </div>
 
@@ -258,7 +258,7 @@ export default function ProgressPage() {
             Complete some lessons to see your grammar progress here.
           </p>
           <Link
-            href="/lesson"
+            href="/learn"
             style={{
               display: 'inline-block',
               padding: '0.75rem 1.5rem',
@@ -433,22 +433,6 @@ export default function ProgressPage() {
                       <span style={{ color: '#ef4444' }}>{stat.struggling} struggling</span>
                     </div>
 
-                    {/* Practice link for struggling features */}
-                    {stat.struggling > 0 && (
-                      <Link
-                        href={`/drills?feature=${stat.feature}`}
-                        style={{
-                          display: 'inline-block',
-                          marginTop: '0.5rem',
-                          fontSize: '0.8rem',
-                          fontFamily: 'Arial, sans-serif',
-                          color: '#3b82f6',
-                          textDecoration: 'none',
-                        }}
-                      >
-                        Practice this →
-                      </Link>
-                    )}
                   </div>
                 );
               })}
