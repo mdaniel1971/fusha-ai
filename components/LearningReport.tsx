@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import type { LearningReport, SkillBreakdown, PatternInsight, Breakthrough, StudyRecommendation } from '@/lib/reportGenerator';
+import type { LearningReport, GrammarBreakdown, TranslationBreakdown, WordMistake } from '@/lib/reportGenerator';
 
 interface LearningReportProps {
   sessionId: string;
@@ -87,6 +87,8 @@ export default function LearningReportComponent({ sessionId, onClose }: Learning
   const scoreColor = report.sessionSummary.overallScore >= 75 ? '#22c55e' :
                      report.sessionSummary.overallScore >= 50 ? '#f59e0b' : '#ef4444';
 
+  const hasData = report.grammarBreakdown.length > 0 || report.translationBreakdown.total > 0;
+
   return (
     <div style={styles.overlay}>
       <div style={styles.modal}>
@@ -106,76 +108,69 @@ export default function LearningReportComponent({ sessionId, onClose }: Learning
             </div>
             <div style={styles.stat}>
               <span style={styles.statValue}>{report.sessionSummary.totalInteractions}</span>
-              <span style={styles.statLabel}>exchanges</span>
+              <span style={styles.statLabel}>questions</span>
+            </div>
+            <div style={styles.stat}>
+              <span style={{ ...styles.statValue, color: '#3b82f6' }}>{report.sessionSummary.grammarAccuracy}%</span>
+              <span style={styles.statLabel}>grammar</span>
+            </div>
+            <div style={styles.stat}>
+              <span style={{ ...styles.statValue, color: '#8b5cf6' }}>{report.sessionSummary.translationAccuracy}%</span>
+              <span style={styles.statLabel}>vocab</span>
             </div>
           </div>
         </div>
 
         <div style={styles.scrollContainer}>
-          {/* Breakthroughs Section */}
-          {report.breakthroughs.length > 0 && (
-            <section style={styles.section}>
-              <h3 style={{ ...styles.sectionTitle, color: '#f59e0b' }}>
-                Breakthrough Moments
-              </h3>
-              {report.breakthroughs.map((b, i) => (
-                <BreakthroughCard key={i} breakthrough={b} />
-              ))}
-            </section>
+          {/* Top Strengths & Weaknesses */}
+          {(report.topStrengths.length > 0 || report.topWeaknesses.length > 0) && (
+            <div style={styles.summaryRow}>
+              {report.topStrengths.length > 0 && (
+                <div style={{ ...styles.summaryCard, borderColor: '#22c55e' }}>
+                  <h3 style={{ ...styles.summaryTitle, color: '#22c55e' }}>Strengths</h3>
+                  {report.topStrengths.map((s, i) => (
+                    <p key={i} style={styles.summaryItem}>{s}</p>
+                  ))}
+                </div>
+              )}
+              {report.topWeaknesses.length > 0 && (
+                <div style={{ ...styles.summaryCard, borderColor: '#ef4444' }}>
+                  <h3 style={{ ...styles.summaryTitle, color: '#ef4444' }}>Needs Work</h3>
+                  {report.topWeaknesses.map((w, i) => (
+                    <p key={i} style={styles.summaryItem}>{w}</p>
+                  ))}
+                </div>
+              )}
+            </div>
           )}
 
-          {/* Strengths Section */}
-          {report.strengths.length > 0 && (
-            <section style={styles.section}>
-              <h3 style={{ ...styles.sectionTitle, color: '#22c55e' }}>
-                Your Strengths
-              </h3>
-              {report.strengths.map((category, i) => (
-                <SkillCategoryCard key={i} category={category} type="strength" />
-              ))}
-            </section>
-          )}
-
-          {/* Growth Areas Section */}
-          {report.weaknesses.length > 0 && (
-            <section style={styles.section}>
-              <h3 style={{ ...styles.sectionTitle, color: '#f97316' }}>
-                Growth Opportunities
-              </h3>
-              {report.weaknesses.map((category, i) => (
-                <SkillCategoryCard key={i} category={category} type="weakness" />
-              ))}
-            </section>
-          )}
-
-          {/* Patterns Section */}
-          {report.patterns.length > 0 && (
-            <section style={styles.section}>
-              <h3 style={{ ...styles.sectionTitle, color: '#8b5cf6' }}>
-                Patterns Detected
-              </h3>
-              {report.patterns.map((pattern, i) => (
-                <PatternCard key={i} pattern={pattern} />
-              ))}
-            </section>
-          )}
-
-          {/* Recommendations Section */}
-          {report.recommendations.length > 0 && (
+          {/* Grammar Breakdown */}
+          {report.grammarBreakdown.length > 0 && (
             <section style={styles.section}>
               <h3 style={{ ...styles.sectionTitle, color: '#3b82f6' }}>
-                Your Study Plan
+                Grammar Breakdown
               </h3>
-              {report.recommendations.map((rec, i) => (
-                <RecommendationCard key={i} recommendation={rec} />
+              {report.grammarBreakdown.map((gb, i) => (
+                <GrammarCard key={i} breakdown={gb} />
               ))}
+            </section>
+          )}
+
+          {/* Vocabulary Breakdown */}
+          {report.translationBreakdown.total > 0 && (
+            <section style={styles.section}>
+              <h3 style={{ ...styles.sectionTitle, color: '#8b5cf6' }}>
+                Vocabulary Breakdown
+              </h3>
+              <VocabularyCard breakdown={report.translationBreakdown} />
             </section>
           )}
 
           {/* Empty State */}
-          {report.strengths.length === 0 && report.weaknesses.length === 0 && (
+          {!hasData && (
             <div style={styles.emptyState}>
-              <p>Keep practicing! More insights will appear as you learn.</p>
+              <p style={{ marginBottom: '0.5rem', fontWeight: 'bold' }}>No data yet!</p>
+              <p>Keep practicing and your progress will appear here.</p>
             </div>
           )}
         </div>
@@ -184,78 +179,87 @@ export default function LearningReportComponent({ sessionId, onClose }: Learning
   );
 }
 
-// Sub-components
-function BreakthroughCard({ breakthrough }: { breakthrough: Breakthrough }) {
-  return (
-    <div style={styles.breakthroughCard}>
-      <span style={styles.breakthroughIcon}>&#9889;</span>
-      <div>
-        <p style={styles.breakthroughMoment}>{breakthrough.moment}</p>
-        <p style={styles.breakthroughContext}>{breakthrough.context}</p>
-      </div>
-    </div>
-  );
-}
-
-function SkillCategoryCard({ category, type }: { category: SkillBreakdown; type: 'strength' | 'weakness' }) {
-  const bgColor = type === 'strength' ? '#22c55e11' : '#f9731611';
-  const borderColor = type === 'strength' ? '#22c55e33' : '#f9731633';
+// Grammar breakdown card
+function GrammarCard({ breakdown }: { breakdown: GrammarBreakdown }) {
+  const accuracyColor = breakdown.accuracy >= 80 ? '#22c55e' :
+                        breakdown.accuracy >= 60 ? '#f59e0b' : '#ef4444';
 
   return (
-    <div style={{ ...styles.categoryCard, background: bgColor, borderColor }}>
-      <h4 style={styles.categoryTitle}>{category.category}</h4>
-      <div style={styles.skillsContainer}>
-        {category.skills.map((skill, i) => (
-          <div key={i} style={styles.skillBadge}>
-            <span style={styles.skillName}>{skill.name}</span>
-            {skill.frequency > 1 && (
-              <span style={styles.skillCount}>x{skill.frequency}</span>
-            )}
-          </div>
-        ))}
+    <div style={styles.breakdownCard}>
+      <div style={styles.breakdownHeader}>
+        <span style={styles.breakdownTitle}>{breakdown.feature}</span>
+        <span style={{ ...styles.accuracyBadge, backgroundColor: accuracyColor }}>
+          {breakdown.accuracy}%
+        </span>
       </div>
-      {category.skills[0]?.examples[0] && (
-        <p style={styles.exampleText}>
-          Example: <span style={styles.arabicExample}>{category.skills[0].examples[0]}</span>
-        </p>
+      <div style={styles.breakdownStats}>
+        <span style={{ color: '#22c55e' }}>{breakdown.correct} correct</span>
+        <span style={{ color: '#999' }}> / </span>
+        <span style={{ color: '#ef4444' }}>{breakdown.incorrect} incorrect</span>
+      </div>
+      {breakdown.mistakes.length > 0 && (
+        <div style={styles.mistakesSection}>
+          <p style={styles.mistakesLabel}>Common mistakes:</p>
+          {breakdown.mistakes.map((m, i) => (
+            <div key={i} style={styles.mistakeItem}>
+              <span style={styles.mistakeWrong}>{m.student}</span>
+              <span style={styles.mistakeArrow}> should be </span>
+              <span style={styles.mistakeCorrect}>{m.correct}</span>
+              {m.count > 1 && <span style={styles.mistakeCount}>x{m.count}</span>}
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );
 }
 
-function PatternCard({ pattern }: { pattern: PatternInsight }) {
-  const impactColors = {
-    high: { bg: '#ef444422', border: '#ef444444', text: '#ef4444' },
-    medium: { bg: '#f59e0b22', border: '#f59e0b44', text: '#f59e0b' },
-    low: { bg: '#22c55e22', border: '#22c55e44', text: '#22c55e' },
-  };
-  const colors = impactColors[pattern.impact];
+// Vocabulary breakdown card
+function VocabularyCard({ breakdown }: { breakdown: TranslationBreakdown }) {
+  const accuracyColor = breakdown.accuracy >= 80 ? '#22c55e' :
+                        breakdown.accuracy >= 60 ? '#f59e0b' : '#ef4444';
 
   return (
-    <div style={{ ...styles.patternCard, background: colors.bg, borderColor: colors.border }}>
-      <div style={styles.patternHeader}>
-        <span style={styles.patternName}>{pattern.pattern}</span>
-        <span style={{ ...styles.impactBadge, background: colors.text }}>{pattern.impact}</span>
+    <div style={styles.breakdownCard}>
+      <div style={styles.breakdownHeader}>
+        <span style={styles.breakdownTitle}>Word Translations</span>
+        <span style={{ ...styles.accuracyBadge, backgroundColor: accuracyColor }}>
+          {breakdown.accuracy}%
+        </span>
       </div>
-      <p style={styles.patternExplanation}>{pattern.explanation}</p>
-      <span style={styles.patternFrequency}>Observed {pattern.frequency}x</span>
-    </div>
-  );
-}
+      <div style={styles.breakdownStats}>
+        <span style={{ color: '#22c55e' }}>{breakdown.correct} correct</span>
+        <span style={{ color: '#999' }}> / </span>
+        <span style={{ color: '#ef4444' }}>{breakdown.incorrect} incorrect</span>
+      </div>
 
-function RecommendationCard({ recommendation }: { recommendation: StudyRecommendation }) {
-  return (
-    <div style={styles.recommendationCard}>
-      <div style={styles.recommendationHeader}>
-        <span style={styles.priorityBadge}>#{recommendation.priority}</span>
-        <span style={styles.recommendationTime}>{recommendation.estimatedTime}</span>
-      </div>
-      <h4 style={styles.recommendationTitle}>{recommendation.skillArea}</h4>
-      <p style={styles.recommendationFocus}>{recommendation.specificFocus}</p>
-      <div style={styles.practicePrompt}>
-        <span style={styles.practiceIcon}>&#128218;</span>
-        <p style={styles.practiceText}>{recommendation.practicePrompt}</p>
-      </div>
+      {/* Struggling Words */}
+      {breakdown.strugglingWords.length > 0 && (
+        <div style={styles.wordSection}>
+          <p style={{ ...styles.wordSectionTitle, color: '#ef4444' }}>Words to Review:</p>
+          {breakdown.strugglingWords.map((word, i) => (
+            <div key={i} style={styles.wordItem}>
+              <span style={styles.arabicWord}>{word.arabic_text || `Word #${word.word_id}`}</span>
+              <span style={styles.wordMeaning}>= "{word.correct_answer}"</span>
+              {word.count > 1 && <span style={styles.wordCount}>missed x{word.count}</span>}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Mastered Words */}
+      {breakdown.masteredWords.length > 0 && (
+        <div style={styles.wordSection}>
+          <p style={{ ...styles.wordSectionTitle, color: '#22c55e' }}>Words You Know:</p>
+          <div style={styles.masteredWordsGrid}>
+            {breakdown.masteredWords.map((word, i) => (
+              <span key={i} style={styles.masteredWord}>
+                {word.arabic_text || `Word #${word.word_id}`}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -278,7 +282,7 @@ const styles: { [key: string]: React.CSSProperties } = {
   modal: {
     background: '#fff',
     borderRadius: '16px',
-    maxWidth: '600px',
+    maxWidth: '650px',
     width: '100%',
     maxHeight: '90vh',
     display: 'flex',
@@ -308,8 +312,8 @@ const styles: { [key: string]: React.CSSProperties } = {
     borderRadius: '16px 16px 0 0',
   },
   scoreCircle: {
-    width: '120px',
-    height: '120px',
+    width: '100px',
+    height: '100px',
     borderRadius: '50%',
     background: '#fff',
     margin: '0 auto 1rem',
@@ -320,18 +324,18 @@ const styles: { [key: string]: React.CSSProperties } = {
     boxShadow: '0 4px 20px rgba(0,0,0,0.1)',
   },
   scoreNumber: {
-    fontSize: '3rem',
+    fontSize: '2.5rem',
     fontWeight: 'bold',
     lineHeight: 1,
   },
   scoreLabel: {
-    fontSize: '0.875rem',
+    fontSize: '0.75rem',
     color: '#666',
     textTransform: 'uppercase',
     letterSpacing: '0.05em',
   },
   motivationalMessage: {
-    fontSize: '1.125rem',
+    fontSize: '1rem',
     color: '#333',
     marginBottom: '1rem',
     fontWeight: 500,
@@ -339,7 +343,8 @@ const styles: { [key: string]: React.CSSProperties } = {
   statsRow: {
     display: 'flex',
     justifyContent: 'center',
-    gap: '2rem',
+    gap: '1.5rem',
+    flexWrap: 'wrap',
   },
   stat: {
     display: 'flex',
@@ -347,12 +352,12 @@ const styles: { [key: string]: React.CSSProperties } = {
     alignItems: 'center',
   },
   statValue: {
-    fontSize: '1.5rem',
+    fontSize: '1.25rem',
     fontWeight: 'bold',
     color: '#333',
   },
   statLabel: {
-    fontSize: '0.75rem',
+    fontSize: '0.7rem',
     color: '#666',
     textTransform: 'uppercase',
   },
@@ -361,169 +366,145 @@ const styles: { [key: string]: React.CSSProperties } = {
     overflowY: 'auto',
     padding: '1.5rem',
   },
+  summaryRow: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+    gap: '1rem',
+    marginBottom: '1.5rem',
+  },
+  summaryCard: {
+    padding: '1rem',
+    borderRadius: '12px',
+    border: '2px solid',
+    background: '#fafafa',
+  },
+  summaryTitle: {
+    fontSize: '0.9rem',
+    fontWeight: 'bold',
+    marginBottom: '0.5rem',
+  },
+  summaryItem: {
+    fontSize: '0.85rem',
+    color: '#444',
+    marginBottom: '0.25rem',
+    paddingLeft: '0.5rem',
+  },
   section: {
     marginBottom: '1.5rem',
   },
   sectionTitle: {
-    fontSize: '1.125rem',
+    fontSize: '1.1rem',
     fontWeight: 600,
     marginBottom: '0.75rem',
+  },
+  breakdownCard: {
+    padding: '1rem',
+    background: '#f8f9fa',
+    borderRadius: '12px',
+    marginBottom: '0.75rem',
+  },
+  breakdownHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: '0.5rem',
+  },
+  breakdownTitle: {
+    fontWeight: 600,
+    color: '#333',
+    fontSize: '1rem',
+  },
+  accuracyBadge: {
+    color: '#fff',
+    padding: '0.25rem 0.75rem',
+    borderRadius: '999px',
+    fontSize: '0.85rem',
+    fontWeight: 'bold',
+  },
+  breakdownStats: {
+    fontSize: '0.85rem',
+    marginBottom: '0.75rem',
+  },
+  mistakesSection: {
+    marginTop: '0.75rem',
+    paddingTop: '0.75rem',
+    borderTop: '1px solid #e5e7eb',
+  },
+  mistakesLabel: {
+    fontSize: '0.8rem',
+    color: '#666',
+    marginBottom: '0.5rem',
+  },
+  mistakeItem: {
+    fontSize: '0.85rem',
+    marginBottom: '0.25rem',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '0.25rem',
+    flexWrap: 'wrap',
+  },
+  mistakeWrong: {
+    color: '#ef4444',
+    textDecoration: 'line-through',
+  },
+  mistakeArrow: {
+    color: '#999',
+    fontSize: '0.75rem',
+  },
+  mistakeCorrect: {
+    color: '#22c55e',
+    fontWeight: 500,
+  },
+  mistakeCount: {
+    color: '#999',
+    fontSize: '0.75rem',
+    marginLeft: '0.25rem',
+  },
+  wordSection: {
+    marginTop: '0.75rem',
+    paddingTop: '0.75rem',
+    borderTop: '1px solid #e5e7eb',
+  },
+  wordSectionTitle: {
+    fontSize: '0.85rem',
+    fontWeight: 600,
+    marginBottom: '0.5rem',
+  },
+  wordItem: {
     display: 'flex',
     alignItems: 'center',
     gap: '0.5rem',
-  },
-  breakthroughCard: {
-    display: 'flex',
-    gap: '0.75rem',
-    padding: '1rem',
-    background: 'linear-gradient(135deg, #fef3c7, #fde68a)',
-    borderRadius: '12px',
     marginBottom: '0.5rem',
+    flexWrap: 'wrap',
   },
-  breakthroughIcon: {
-    fontSize: '1.5rem',
-  },
-  breakthroughMoment: {
-    fontWeight: 600,
-    color: '#92400e',
-    marginBottom: '0.25rem',
-  },
-  breakthroughContext: {
-    fontSize: '0.875rem',
-    color: '#b45309',
-  },
-  categoryCard: {
-    padding: '1rem',
-    borderRadius: '12px',
-    border: '1px solid',
-    marginBottom: '0.5rem',
-  },
-  categoryTitle: {
-    fontSize: '0.875rem',
-    fontWeight: 600,
+  arabicWord: {
+    fontFamily: "'Amiri', 'Traditional Arabic', serif",
+    fontSize: '1.2rem',
     color: '#333',
-    marginBottom: '0.5rem',
   },
-  skillsContainer: {
+  wordMeaning: {
+    fontSize: '0.85rem',
+    color: '#666',
+  },
+  wordCount: {
+    fontSize: '0.75rem',
+    color: '#ef4444',
+    background: '#fee2e2',
+    padding: '0.125rem 0.5rem',
+    borderRadius: '999px',
+  },
+  masteredWordsGrid: {
     display: 'flex',
     flexWrap: 'wrap',
     gap: '0.5rem',
   },
-  skillBadge: {
-    background: '#fff',
+  masteredWord: {
+    fontFamily: "'Amiri', 'Traditional Arabic', serif",
+    fontSize: '1rem',
+    background: '#dcfce7',
+    color: '#166534',
     padding: '0.25rem 0.75rem',
     borderRadius: '999px',
-    fontSize: '0.8rem',
-    display: 'flex',
-    alignItems: 'center',
-    gap: '0.25rem',
-    border: '1px solid #e5e7eb',
-  },
-  skillName: {
-    color: '#374151',
-  },
-  skillCount: {
-    background: '#e5e7eb',
-    padding: '0 0.375rem',
-    borderRadius: '999px',
-    fontSize: '0.7rem',
-    color: '#6b7280',
-  },
-  exampleText: {
-    marginTop: '0.75rem',
-    fontSize: '0.8rem',
-    color: '#666',
-  },
-  arabicExample: {
-    fontFamily: "'Amiri', 'Traditional Arabic', serif",
-    fontSize: '1.1em',
-    color: '#333',
-  },
-  patternCard: {
-    padding: '1rem',
-    borderRadius: '12px',
-    border: '1px solid',
-    marginBottom: '0.5rem',
-  },
-  patternHeader: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: '0.5rem',
-  },
-  patternName: {
-    fontWeight: 600,
-    color: '#333',
-  },
-  impactBadge: {
-    color: '#fff',
-    padding: '0.125rem 0.5rem',
-    borderRadius: '999px',
-    fontSize: '0.7rem',
-    textTransform: 'uppercase',
-    fontWeight: 600,
-  },
-  patternExplanation: {
-    fontSize: '0.875rem',
-    color: '#555',
-    marginBottom: '0.5rem',
-  },
-  patternFrequency: {
-    fontSize: '0.75rem',
-    color: '#888',
-  },
-  recommendationCard: {
-    padding: '1rem',
-    background: '#f8fafc',
-    borderRadius: '12px',
-    border: '1px solid #e2e8f0',
-    marginBottom: '0.75rem',
-  },
-  recommendationHeader: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: '0.5rem',
-  },
-  priorityBadge: {
-    background: '#3b82f6',
-    color: '#fff',
-    padding: '0.125rem 0.5rem',
-    borderRadius: '999px',
-    fontSize: '0.75rem',
-    fontWeight: 600,
-  },
-  recommendationTime: {
-    fontSize: '0.75rem',
-    color: '#64748b',
-  },
-  recommendationTitle: {
-    fontSize: '1rem',
-    fontWeight: 600,
-    color: '#1e293b',
-    marginBottom: '0.25rem',
-  },
-  recommendationFocus: {
-    fontSize: '0.875rem',
-    color: '#475569',
-    marginBottom: '0.75rem',
-  },
-  practicePrompt: {
-    display: 'flex',
-    gap: '0.5rem',
-    padding: '0.75rem',
-    background: '#fff',
-    borderRadius: '8px',
-    border: '1px dashed #cbd5e1',
-  },
-  practiceIcon: {
-    fontSize: '1.25rem',
-  },
-  practiceText: {
-    fontSize: '0.8rem',
-    color: '#475569',
-    lineHeight: 1.4,
-    margin: 0,
   },
   loadingContainer: {
     display: 'flex',

@@ -1,8 +1,15 @@
-import { NextRequest } from 'next/server';
-import Anthropic from '@anthropic-ai/sdk';
-import { createClient } from '@supabase/supabase-js';
-import { parseGrammarObservations, logGrammarObservations } from '@/lib/grammarObservationLogger';
-import { parseTranslationObservations, logTranslationObservations } from '@/lib/translationObservationLogger';
+import { NextRequest } from "next/server";
+import Anthropic from "@anthropic-ai/sdk";
+import { createClient } from "@supabase/supabase-js";
+import {
+  parseGrammarObservations,
+  logGrammarObservations,
+} from "@/lib/grammarObservationLogger";
+import {
+  parseTranslationObservations,
+  logTranslationObservations,
+} from "@/lib/translationObservationLogger";
+import { loadLearnerContext, buildContextPrompt } from "@/lib/db";
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY!,
@@ -10,28 +17,30 @@ const anthropic = new Anthropic({
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
 );
 
 // Fetch verses and words for a surah (up to 20 words)
 async function fetchSurahData(surahId: number, maxWords = 20) {
   const { data: verses, error: versesError } = await supabase
-    .from('verses')
-    .select('id, verse_number, text_arabic')
-    .eq('surah_id', surahId)
-    .order('verse_number', { ascending: true });
+    .from("verses")
+    .select("id, verse_number, text_arabic")
+    .eq("surah_id", surahId)
+    .order("verse_number", { ascending: true });
 
   if (versesError || !verses?.length) {
     return { verses: [], words: [] };
   }
 
-  const verseIds = verses.map(v => v.id);
+  const verseIds = verses.map((v) => v.id);
   const { data: words } = await supabase
-    .from('words')
-    .select('id, verse_id, word_position, text_arabic, transliteration, translation_english, part_of_speech')
-    .in('verse_id', verseIds)
-    .order('verse_id', { ascending: true })
-    .order('word_position', { ascending: true })
+    .from("words")
+    .select(
+      "id, verse_id, word_position, text_arabic, transliteration, translation_english, part_of_speech",
+    )
+    .in("verse_id", verseIds)
+    .order("verse_id", { ascending: true })
+    .order("word_position", { ascending: true })
     .limit(maxWords);
 
   return { verses, words: words || [] };
@@ -60,9 +69,22 @@ ARABIC RECOGNITION:
 - Accept connected and spaced forms: الحمدلله / الحمد لله
 - Focus on meaning and usage, not spelling variants
 
-COMPOUND WORDS:
-- Accept answers identifying ANY component correctly
-- بِسْمِ = بِ (preposition) + اسْمِ (noun) - both correct
+DEFINITENESS (CRITICAL):
+- "the X" in English = الـ + word in Arabic (definite article required)
+- "a/an X" or just "X" = word without ال (indefinite)
+- Example: "the day" = اليوم | "day/a day" = يوم
+- Example: "the Lord" = الرب | "Lord/a lord" = رب
+- If you ask "How do you say 'the Day'?" the answer MUST include ال
+- If student provides اليوم for "the day", that is CORRECT
+- If student provides يوم for "the day", that is WRONG (missing ال)
+- Never claim definiteness comes from "context" - Arabic marks it explicitly with ال
+
+COMPOUND WORDS & ENCLITICS:
+- Be precise with strings containing attached pronouns or prefixes.
+- If a string contains an attached pronoun (e.g., نا in اهْدِنَا or كَ in إِيَّاكَ), you MUST NOT ask "what part of speech is [entire string]".
+- Instead, isolate the specific part: "In [phrase], what part of speech is the suffix نا?"
+- Accept answers identifying ANY component correctly.
+- بِسْمِ = بِ (preposition) + اسْمِ (noun) - treat as two parts.
 
 TEACHING APPROACH:
 - After student responds, give brief feedback then continue
@@ -82,6 +104,12 @@ You may ONLY ask about words that appear in the ANSWER KEY above.
 - ONLY use words from this surah's answer key - no exceptions
 - If a word isn't listed in the answer key, you cannot ask about it
 - Do not invent translations or grammar - use exactly what the answer key provides
+
+MORPHOLOGICAL AWARENESS:
+- Arabic strings often combine multiple parts of speech.
+- If asking about a fused word (e.g., Verb+Pronoun), specify which part you want.
+- BAD: "What part of speech is اهْدِنَا?"
+- GOOD: "In the word اهْدِنَا, what part of speech is the first part, اهْدِ?" 
 
 ANSWER FORMAT FLEXIBILITY:
 - Accept Arabic in script OR transliteration (الحمد or alhamd)
@@ -105,8 +133,9 @@ Translation: [TRANS:word_id|student_answer|correct_answer|correct/incorrect]
 
 const GRAMMAR_LEVELS: Record<number, string> = {
   1: `LEVEL 1: PARTS OF SPEECH
-Ask ONLY: "In [phrase], what part of speech is [word]?"
-Answers: noun, verb, particle, preposition (use [part_of_speech] from answer key)
+Ask ONLY: "In [phrase], what part of speech is [segment]?"
+- If the word in the key is compound (e.g., اهْدِنَا), ask about one part specifically (the verb or the suffix pronoun).
+- Answers: noun, verb, particle, preposition, pronoun (use [part_of_speech] from answer key)
 Do NOT ask about cases, verb forms, or roots at this level.`,
 
   2: `LEVEL 2: GRAMMATICAL CASES
@@ -128,7 +157,7 @@ Do NOT ask about roots or voice at this level.`,
 Ask about:
 - "What is the 3-letter root of [word]?" (e.g., ح-م-د for الحمد)
 - "Is [verb] active or passive voice?" (مَعْلُوم/ma'lum or مَجْهُول/majhul)
-This is the most advanced grammar level.`
+This is the most advanced grammar level.`,
 };
 
 const TRANSLATION_LEVELS: Record<number, string> = {
@@ -139,7 +168,8 @@ Accept answers matching or close to the (translation) in answer key.`,
 
   2: `LEVEL 2: REVERSE TRANSLATION (English → Arabic)
 Ask ONLY: "How do you say [English] in Arabic?" or "Which word means [definition]?"
-Use translations from the answer key, student provides Arabic word.`,
+Use translations from the answer key, student provides Arabic word.
+CRITICAL: If asking for "the X", the correct answer MUST include ال (e.g., "the day" = اليوم, NOT يوم).`,
 
   3: `LEVEL 3: TWO-WORD PHRASES
 Ask ONLY about 2 consecutive words from a verse.
@@ -149,7 +179,7 @@ Build expected answer from both words' translations in answer key.`,
   4: `LEVEL 4: FULL PHRASES
 Ask about 3+ word sequences from the verses.
 Example: "Translate: الْحَمْدُ لِلَّهِ رَبِّ الْعَالَمِينَ"
-Build expected answer by combining translations from answer key.`
+Build expected answer by combining translations from answer key.`,
 };
 
 // ===========================================
@@ -175,18 +205,29 @@ Use [GRAM:...] for grammar, [TRANS:...] for translation.`;
 // SURAH-BASED PROMPT BUILDER
 // ===========================================
 
-type LearningMode = 'grammar' | 'translation' | 'mix';
+type LearningMode = "grammar" | "translation" | "mix";
 
-function buildSurahPrompt(verses: any[], words: any[], surahName: string, learningMode: LearningMode, startLevel: number = 1): string {
-  const verseList = verses.map(v => `Verse ${v.verse_number}: ${v.text_arabic}`).join('\n');
+function buildSurahPrompt(
+  verses: any[],
+  words: any[],
+  surahName: string,
+  learningMode: LearningMode,
+  startLevel: number = 1,
+): string {
+  const verseList = verses
+    .map((v) => `Verse ${v.verse_number}: ${v.text_arabic}`)
+    .join("\n");
 
   // Build answer key with word IDs
-  let answerKey = '';
+  let answerKey = "";
   for (const verse of verses) {
     const verseWords = words.filter((w: any) => w.verse_id === verse.id);
-    const wordDetails = verseWords.map((w: any) =>
-      `ID:${w.id} ${w.text_arabic} (${w.translation_english || '?'}) [${w.part_of_speech || '?'}]`
-    ).join(' | ');
+    const wordDetails = verseWords
+      .map(
+        (w: any) =>
+          `ID:${w.id} ${w.text_arabic} (${w.translation_english || "?"}) [${w.part_of_speech || "?"}]`,
+      )
+      .join(" | ");
     if (wordDetails) {
       answerKey += `Verse ${verse.verse_number}: ${wordDetails}\n`;
     }
@@ -197,20 +238,22 @@ function buildSurahPrompt(verses: any[], words: any[], surahName: string, learni
   let levelInstructions: string;
 
   switch (learningMode) {
-    case 'grammar':
+    case "grammar":
       modePrompt = GRAMMAR_MODE_PROMPT;
       levelInstructions = GRAMMAR_LEVELS[startLevel] || GRAMMAR_LEVELS[1];
       break;
-    case 'translation':
+    case "translation":
       modePrompt = TRANSLATION_MODE_PROMPT;
-      levelInstructions = TRANSLATION_LEVELS[startLevel] || TRANSLATION_LEVELS[1];
+      levelInstructions =
+        TRANSLATION_LEVELS[startLevel] || TRANSLATION_LEVELS[1];
       break;
-    case 'mix':
+    case "mix":
     default:
       modePrompt = MIX_MODE_PROMPT;
       // For mix mode, combine both level instructions
       const gramLevel = GRAMMAR_LEVELS[startLevel] || GRAMMAR_LEVELS[1];
-      const transLevel = TRANSLATION_LEVELS[startLevel] || TRANSLATION_LEVELS[1];
+      const transLevel =
+        TRANSLATION_LEVELS[startLevel] || TRANSLATION_LEVELS[1];
       levelInstructions = `FOR GRAMMAR QUESTIONS:\n${gramLevel}\n\nFOR TRANSLATION QUESTIONS:\n${transLevel}`;
   }
 
@@ -238,35 +281,55 @@ START: Greet the student and ask your first question at this level.`;
 
 export async function POST(request: NextRequest) {
   try {
-    const { messages, surahId = 1, sessionId, model = 'claude-haiku-4-5-20251001', learningMode = 'mix', startLevel = 1 } = await request.json();
+    const {
+      messages,
+      surahId = 1,
+      sessionId,
+      userId,
+      model = "claude-haiku-4-5-20251001",
+      learningMode = "mix",
+      startLevel = 1,
+    } = await request.json();
 
-    // Fetch all data in parallel (up to 20 words)
-    const [surahData, surahInfo] = await Promise.all([
+    const [surahData, surahInfo, learnerContext] = await Promise.all([
       fetchSurahData(surahId, 20),
-      supabase.from('surahs').select('name_english').eq('id', surahId).single()
+      supabase.from("surahs").select("name_english").eq("id", surahId).single(),
+      userId ? loadLearnerContext(userId) : Promise.resolve(null),
     ]);
 
     const { verses, words } = surahData;
     const surahName = surahInfo.data?.name_english || `Surah ${surahId}`;
 
-    // Build surah prompt with learning mode and starting level
-    const surahPrompt = buildSurahPrompt(verses, words, surahName, learningMode as LearningMode, startLevel);
+    const surahPrompt = buildSurahPrompt(
+      verses,
+      words,
+      surahName,
+      learningMode as LearningMode,
+      startLevel,
+    );
 
-    // Combine base + surah prompt
-    const systemPrompt = BASE_PROMPT + '\n' + surahPrompt;
+    let learnerContextPrompt = "";
+    if (learnerContext) {
+      const contextText = buildContextPrompt(learnerContext);
+      learnerContextPrompt = `\n\n=== LEARNER PROFILE ===\n${contextText}\n\nUse this information to personalize your teaching. Address struggles carefully, build on strengths, and maintain continuity with previous lessons.`;
+    }
 
-    const claudeMessages = messages.map((msg: { role: string; content: string }) => ({
-      role: msg.role as 'user' | 'assistant',
-      content: msg.content,
-    }));
+    const systemPrompt =
+      BASE_PROMPT + learnerContextPrompt + "\n" + surahPrompt;
+
+    const claudeMessages = messages.map(
+      (msg: { role: string; content: string }) => ({
+        role: msg.role as "user" | "assistant",
+        content: msg.content,
+      }),
+    );
 
     const encoder = new TextEncoder();
 
-    // Pricing per million tokens (from Anthropic console, Jan 2026)
     const MODEL_PRICING: Record<string, { input: number; output: number }> = {
-      'claude-haiku-4-5-20251001': { input: 1.00, output: 5.00 },
-      'claude-sonnet-4-5-20250929': { input: 3.00, output: 15.00 },
-      'claude-opus-4-5-20251101': { input: 5.00, output: 25.00 },
+      "claude-haiku-4-5-20251001": { input: 1.0, output: 5.0 },
+      "claude-sonnet-4-5-20250929": { input: 3.0, output: 15.0 },
+      "claude-opus-4-5-20251101": { input: 5.0, output: 25.0 },
     };
 
     const stream = new ReadableStream({
@@ -279,37 +342,36 @@ export async function POST(request: NextRequest) {
             messages: claudeMessages,
           });
 
-          let fullResponse = '';
+          let fullResponse = "";
 
-          // Collect the full response first, then stream the cleaned version
           for await (const event of response) {
-            if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+            if (
+              event.type === "content_block_delta" &&
+              event.delta.type === "text_delta"
+            ) {
               fullResponse += event.delta.text;
             }
           }
 
-          // Get final message with usage info
           const finalMessage = await response.finalMessage();
           const usage = finalMessage.usage;
-          const pricing = MODEL_PRICING[model] || MODEL_PRICING['claude-haiku-4-5-20251001'];
+          const pricing =
+            MODEL_PRICING[model] || MODEL_PRICING["claude-haiku-4-5-20251001"];
           const inputCost = (usage.input_tokens / 1_000_000) * pricing.input;
           const outputCost = (usage.output_tokens / 1_000_000) * pricing.output;
-          const totalCost = inputCost + outputCost;
 
-          // Remove all GRAM and TRANS tags and markdown formatting from the complete response
           let cleanedResponse = fullResponse
-            .replace(/\[GRAM:[^\]]+\]\s*/g, '')
-            .replace(/\[TRANS:[^\]]+\]\s*/g, '')
-            .trim();
-          // Remove markdown: bold (**text**), italics (*text* or _text_), backticks, etc.
-          cleanedResponse = cleanedResponse
-            .replace(/\*\*(.+?)\*\*/g, '$1')  // **bold** → bold
-            .replace(/\*(.+?)\*/g, '$1')      // *italic* → italic
-            .replace(/_(.+?)_/g, '$1')        // _italic_ → italic
-            .replace(/`(.+?)`/g, '$1')        // `code` → code
+            .replace(/\[GRAM:[^\]]+\]\s*/g, "")
+            .replace(/\[TRANS:[^\]]+\]\s*/g, "")
             .trim();
 
-          // Stream the cleaned response in chunks for a natural feel
+          cleanedResponse = cleanedResponse
+            .replace(/\*\*(.+?)\*\*/g, "$1")
+            .replace(/\*(.+?)\*/g, "$1")
+            .replace(/_(.+?)_/g, "$1")
+            .replace(/`(.+?)`/g, "$1")
+            .trim();
+
           if (cleanedResponse) {
             const chunkSize = 20;
             for (let i = 0; i < cleanedResponse.length; i += chunkSize) {
@@ -319,7 +381,6 @@ export async function POST(request: NextRequest) {
             }
           }
 
-          // Send usage data as a separate event
           const usageData = JSON.stringify({
             usage: {
               inputTokens: usage.input_tokens,
@@ -327,46 +388,49 @@ export async function POST(request: NextRequest) {
               totalTokens: usage.input_tokens + usage.output_tokens,
               inputCost: inputCost.toFixed(6),
               outputCost: outputCost.toFixed(6),
-              totalCost: totalCost.toFixed(6),
+              totalCost: (inputCost + outputCost).toFixed(6),
               model,
-            }
+            },
           });
           controller.enqueue(encoder.encode(`data: ${usageData}\n\n`));
 
-          // Log observations asynchronously (don't block the response)
-          console.log('Checking for tags - sessionId:', sessionId, 'responseLength:', fullResponse.length);
           if (sessionId && fullResponse) {
-            // Log grammar observations (GRAM tags)
             const gramMatch = fullResponse.match(/\[GRAM:[^\]]+\]/g);
             if (gramMatch) {
-              console.log('Raw GRAM tags found:', gramMatch);
-              const { observations: grammarObs } = parseGrammarObservations(fullResponse, sessionId);
-              console.log('GRAM tags parsed:', grammarObs.length);
+              const { observations: grammarObs } = parseGrammarObservations(
+                fullResponse,
+                sessionId,
+                userId,
+              );
               if (grammarObs.length > 0) {
-                logGrammarObservations(grammarObs).catch((err: Error) => {
-                  console.error('Failed to log grammar observations:', err);
-                });
+                logGrammarObservations(grammarObs).catch((err: Error) =>
+                  console.error(err),
+                );
               }
             }
 
-            // Log translation observations (TRANS tags)
             const transMatch = fullResponse.match(/\[TRANS:[^\]]+\]/g);
             if (transMatch) {
-              console.log('Raw TRANS tags found:', transMatch);
-              const { observations: transObs } = parseTranslationObservations(fullResponse, sessionId);
-              console.log('TRANS tags parsed:', transObs.length);
+              const { observations: transObs } = parseTranslationObservations(
+                fullResponse,
+                sessionId,
+                userId,
+              );
               if (transObs.length > 0) {
-                logTranslationObservations(transObs).catch((err: Error) => {
-                  console.error('Failed to log translation observations:', err);
-                });
+                logTranslationObservations(transObs).catch((err: Error) =>
+                  console.error(err),
+                );
               }
             }
           }
 
-          controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
         } catch (error) {
-          console.error('Stream error:', error);
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: 'Stream failed' })}\n\n`));
+          controller.enqueue(
+            encoder.encode(
+              `data: ${JSON.stringify({ error: "Stream failed" })}\n\n`,
+            ),
+          );
         }
         controller.close();
       },
@@ -374,16 +438,15 @@ export async function POST(request: NextRequest) {
 
     return new Response(stream, {
       headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
       },
     });
   } catch (error) {
-    console.error('Chat error:', error);
-    return new Response(
-      JSON.stringify({ error: 'Failed to get response' }),
-      { status: 500, headers: { 'Content-Type': 'application/json' } }
-    );
+    return new Response(JSON.stringify({ error: "Failed to get response" }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" },
+    });
   }
 }

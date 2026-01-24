@@ -1,17 +1,53 @@
 import { supabase } from './supabase';
-import { LearningObservation, ObservationType, SkillCategory } from './observationLogger';
 
 // Report interfaces
-export interface SkillDetail {
-  name: string;
-  frequency: number;
-  examples: string[];
-  confidence?: string;
+export interface WordMistake {
+  word_id: number;
+  arabic_text?: string;
+  student_answer: string;
+  correct_answer: string;
+  count: number;
 }
 
+export interface GrammarBreakdown {
+  feature: string;
+  total: number;
+  correct: number;
+  incorrect: number;
+  accuracy: number;
+  mistakes: { student: string; correct: string; count: number }[];
+}
+
+export interface TranslationBreakdown {
+  total: number;
+  correct: number;
+  incorrect: number;
+  accuracy: number;
+  strugglingWords: WordMistake[];
+  masteredWords: { word_id: number; arabic_text?: string; correct_answer: string; count: number }[];
+}
+
+export interface SessionSummary {
+  timeSpent: number;
+  totalInteractions: number;
+  overallScore: number;
+  grammarAccuracy: number;
+  translationAccuracy: number;
+}
+
+export interface LearningReport {
+  sessionSummary: SessionSummary;
+  grammarBreakdown: GrammarBreakdown[];
+  translationBreakdown: TranslationBreakdown;
+  topStrengths: string[];
+  topWeaknesses: string[];
+  generatedAt: Date;
+}
+
+// For backwards compatibility with component
 export interface SkillBreakdown {
   category: string;
-  skills: SkillDetail[];
+  skills: { name: string; frequency: number; examples: string[] }[];
 }
 
 export interface PatternInsight {
@@ -35,52 +71,59 @@ export interface StudyRecommendation {
   estimatedTime: string;
 }
 
-export interface SessionSummary {
-  timeSpent: number;
-  totalInteractions: number;
-  overallScore: number;
+// Fetch grammar observations for a session
+async function fetchGrammarObservations(sessionId: string) {
+  const { data, error } = await supabase
+    .from('grammar_observations')
+    .select('*')
+    .eq('session_id', sessionId)
+    .order('created_at', { ascending: true });
+
+  if (error) {
+    console.error('Error fetching grammar observations:', error);
+    return [];
+  }
+  return data || [];
 }
 
-export interface LearningReport {
-  sessionSummary: SessionSummary;
-  strengths: SkillBreakdown[];
-  weaknesses: SkillBreakdown[];
-  patterns: PatternInsight[];
-  breakthroughs: Breakthrough[];
-  recommendations: StudyRecommendation[];
-  generatedAt: Date;
+// Fetch translation observations for a session
+async function fetchTranslationObservations(sessionId: string) {
+  const { data, error } = await supabase
+    .from('translation_observations')
+    .select('*')
+    .eq('session_id', sessionId)
+    .order('created_at', { ascending: true });
+
+  if (error) {
+    console.error('Error fetching translation observations:', error);
+    return [];
+  }
+  return data || [];
 }
 
-// Category display names
-const CATEGORY_NAMES: Record<SkillCategory, string> = {
-  vocabulary: 'Vocabulary',
-  grammar: 'Grammar',
-  pronunciation: 'Pronunciation',
-  comprehension: 'Comprehension',
-  fluency: 'Fluency',
-};
+// Fetch word details by IDs
+async function fetchWordDetails(wordIds: number[]) {
+  if (wordIds.length === 0) return new Map<number, { arabic: string; english: string }>();
 
-// Impact weights for different skill categories
-const CATEGORY_IMPACT: Record<SkillCategory, number> = {
-  grammar: 5,        // Grammar affects everything
-  vocabulary: 4,     // Core building blocks
-  comprehension: 3,  // Understanding is key
-  fluency: 2,        // Polish and flow
-  pronunciation: 1,  // Important but less foundational
-};
+  const { data, error } = await supabase
+    .from('words')
+    .select('id, text_arabic, translation_english')
+    .in('id', wordIds);
 
-// Fetch observations for a session
-// Note: learning_observations table doesn't exist - returns empty
-// Future: consider integrating grammar_observations for reports
-async function fetchSessionObservations(sessionId: string): Promise<LearningObservation[]> {
-  // Table doesn't exist - return empty array
-  // Grammar observations are now stored in grammar_observations table
-  console.log('fetchSessionObservations called for session:', sessionId, '(table not available)');
-  return [];
+  if (error) {
+    console.error('Error fetching word details:', error);
+    return new Map<number, { arabic: string; english: string }>();
+  }
+
+  const wordMap = new Map<number, { arabic: string; english: string }>();
+  for (const word of data || []) {
+    wordMap.set(word.id, { arabic: word.text_arabic, english: word.translation_english });
+  }
+  return wordMap;
 }
 
-// Fetch session details for time calculation
-async function fetchSessionDetails(sessionId: string): Promise<{ startedAt: Date | null; endedAt: Date | null }> {
+// Fetch session details
+async function fetchSessionDetails(sessionId: string) {
   const { data, error } = await supabase
     .from('sessions')
     .select('started_at, ended_at')
@@ -97,281 +140,30 @@ async function fetchSessionDetails(sessionId: string): Promise<{ startedAt: Date
   };
 }
 
-// Group observations by category
-function aggregateByCategory(
-  observations: LearningObservation[],
-  filterType: ObservationType
-): SkillBreakdown[] {
-  const categoryMap = new Map<SkillCategory, Map<string, { count: number; examples: string[] }>>();
-
-  // Filter and group
-  const filtered = observations.filter(obs => obs.observation_type === filterType);
-
-  for (const obs of filtered) {
-    const category = obs.skill_category;
-    if (!categoryMap.has(category)) {
-      categoryMap.set(category, new Map());
-    }
-
-    const skillMap = categoryMap.get(category)!;
-    const skill = obs.specific_skill;
-
-    if (!skillMap.has(skill)) {
-      skillMap.set(skill, { count: 0, examples: [] });
-    }
-
-    const entry = skillMap.get(skill)!;
-    entry.count++;
-    if (obs.arabic_example && entry.examples.length < 3) {
-      entry.examples.push(obs.arabic_example);
-    } else if (obs.observed_behavior && entry.examples.length < 3) {
-      entry.examples.push(obs.observed_behavior);
-    }
-  }
-
-  // Convert to array format
-  const result: SkillBreakdown[] = [];
-
-  Array.from(categoryMap.entries()).forEach(([category, skillMap]) => {
-    const skills: SkillDetail[] = [];
-
-    Array.from(skillMap.entries()).forEach(([name, data]) => {
-      skills.push({
-        name,
-        frequency: data.count,
-        examples: data.examples,
-      });
-    });
-
-    // Sort skills by frequency
-    skills.sort((a, b) => b.frequency - a.frequency);
-
-    result.push({
-      category: CATEGORY_NAMES[category],
-      skills,
-    });
-  });
-
-  // Sort categories by total skill count
-  result.sort((a, b) => {
-    const aTotal = a.skills.reduce((sum, s) => sum + s.frequency, 0);
-    const bTotal = b.skills.reduce((sum, s) => sum + s.frequency, 0);
-    return bTotal - aTotal;
-  });
-
-  return result;
-}
-
-// Detect recurring patterns
-function detectPatterns(observations: LearningObservation[]): PatternInsight[] {
-  const patterns: PatternInsight[] = [];
-  const patternObs = observations.filter(obs => obs.observation_type === 'pattern');
-
-  // Group by skill
-  const skillCounts = new Map<string, { count: number; category: SkillCategory; description: string }>();
-
-  for (const obs of patternObs) {
-    const key = obs.specific_skill;
-    if (!skillCounts.has(key)) {
-      skillCounts.set(key, {
-        count: 0,
-        category: obs.skill_category,
-        description: obs.observed_behavior,
-      });
-    }
-    skillCounts.get(key)!.count++;
-  }
-
-  // Also detect patterns from repeated weaknesses
-  const weaknessCounts = new Map<string, { count: number; category: SkillCategory; description: string }>();
-  const weaknesses = observations.filter(obs => obs.observation_type === 'weakness');
-
-  for (const obs of weaknesses) {
-    const key = obs.specific_skill;
-    if (!weaknessCounts.has(key)) {
-      weaknessCounts.set(key, {
-        count: 0,
-        category: obs.skill_category,
-        description: obs.observed_behavior,
-      });
-    }
-    weaknessCounts.get(key)!.count++;
-  }
-
-  // Convert explicit patterns
-  Array.from(skillCounts.entries()).forEach(([skill, data]) => {
-    const categoryImpact = CATEGORY_IMPACT[data.category];
-    const impact: 'high' | 'medium' | 'low' = categoryImpact >= 4 ? 'high' :
-                   categoryImpact >= 2 ? 'medium' : 'low';
-
-    patterns.push({
-      pattern: skill,
-      frequency: data.count,
-      impact,
-      explanation: data.description,
-    });
-  });
-
-  // Add repeated weaknesses as patterns (if 2+ occurrences)
-  Array.from(weaknessCounts.entries()).forEach(([skill, data]) => {
-    if (data.count >= 2 && !skillCounts.has(skill)) {
-      const categoryImpact = CATEGORY_IMPACT[data.category];
-      const impact: 'high' | 'medium' | 'low' = categoryImpact >= 4 ? 'high' :
-                     categoryImpact >= 2 ? 'medium' : 'low';
-
-      patterns.push({
-        pattern: `Recurring: ${skill}`,
-        frequency: data.count,
-        impact,
-        explanation: `This issue appeared ${data.count} times: ${data.description}`,
-      });
-    }
-  });
-
-  // Sort by impact and frequency
-  const impactOrder = { high: 3, medium: 2, low: 1 };
-  patterns.sort((a, b) => {
-    const impactDiff = impactOrder[b.impact] - impactOrder[a.impact];
-    return impactDiff !== 0 ? impactDiff : b.frequency - a.frequency;
-  });
-
-  return patterns.slice(0, 5); // Top 5 patterns
-}
-
-// Extract breakthrough moments
-function extractBreakthroughs(observations: LearningObservation[]): Breakthrough[] {
-  return observations
-    .filter(obs => obs.observation_type === 'breakthrough')
-    .map(obs => ({
-      moment: obs.specific_skill,
-      timestamp: new Date(),
-      context: obs.observed_behavior,
-    }));
-}
-
-// Calculate overall score
-function calculateScore(observations: LearningObservation[]): number {
-  if (observations.length === 0) return 0;
-
-  let score = 50; // Base score
-
-  for (const obs of observations) {
-    const categoryWeight = CATEGORY_IMPACT[obs.skill_category] || 1;
-
-    switch (obs.observation_type) {
-      case 'strength':
-        score += 3 * categoryWeight;
-        break;
-      case 'weakness':
-        score -= 2 * categoryWeight;
-        break;
-      case 'breakthrough':
-        score += 5 * categoryWeight;
-        break;
-      case 'pattern':
-        // Patterns are neutral - they're informational
-        break;
-    }
-  }
-
-  // Normalize to 0-100
-  return Math.max(0, Math.min(100, score));
-}
-
-// Generate prioritized recommendations
-function prioritizeRecommendations(
-  weaknesses: SkillBreakdown[],
-  patterns: PatternInsight[]
-): StudyRecommendation[] {
-  const recommendations: StudyRecommendation[] = [];
-  let priority = 1;
-
-  // First, address high-impact patterns
-  for (const pattern of patterns) {
-    if (pattern.impact === 'high' && priority <= 5) {
-      recommendations.push({
-        priority: priority++,
-        skillArea: pattern.pattern.replace('Recurring: ', ''),
-        specificFocus: pattern.explanation,
-        practicePrompt: generatePracticePrompt(pattern.pattern, pattern.explanation),
-        estimatedTime: '10-15 minutes',
-      });
-    }
-  }
-
-  // Then, most frequent weaknesses by category
-  for (const category of weaknesses) {
-    for (const skill of category.skills) {
-      if (priority > 5) break;
-      if (skill.frequency >= 1) {
-        recommendations.push({
-          priority: priority++,
-          skillArea: `${category.category}: ${skill.name}`,
-          specificFocus: skill.examples[0] || skill.name,
-          practicePrompt: generatePracticePrompt(skill.name, skill.examples[0] || ''),
-          estimatedTime: skill.frequency > 2 ? '15-20 minutes' : '5-10 minutes',
-        });
-      }
-    }
-    if (priority > 5) break;
-  }
-
-  return recommendations;
-}
-
-// Generate practice prompts
-function generatePracticePrompt(skill: string, example: string): string {
-  const skillLower = skill.toLowerCase();
-
-  if (skillLower.includes('preposition') || skillLower.includes('في') || skillLower.includes('على')) {
-    return `Practice using في (in), على (on), and إلى (to) in 5 different location sentences.`;
-  }
-
-  if (skillLower.includes('verb') || skillLower.includes('conjugat')) {
-    return `Conjugate 3 verbs in past, present, and command forms. Focus on the patterns.`;
-  }
-
-  if (skillLower.includes('case') || skillLower.includes('marfu') || skillLower.includes('mansub')) {
-    return `Identify the grammatical case of nouns in 5 Quranic verses and explain why.`;
-  }
-
-  if (skillLower.includes('root')) {
-    return `Find 5 words that share the same three-letter root and compare their meanings.`;
-  }
-
-  if (skillLower.includes('word order') || skillLower.includes('adjective')) {
-    return `Practice noun-adjective pairs: write 5 phrases with the adjective after the noun.`;
-  }
-
-  // Generic prompt
-  return `Practice this skill with 3 different examples: ${example || skill}`;
+// Format grammar feature names for display
+function formatFeatureName(feature: string): string {
+  const featureNames: Record<string, string> = {
+    'part_of_speech': 'Parts of Speech',
+    'grammatical_case': 'Grammatical Cases',
+    'verb_form': 'Verb Forms',
+    'verb_tense': 'Verb Tenses',
+    'verb_voice': 'Active/Passive Voice',
+    'gender': 'Gender',
+    'number': 'Singular/Plural',
+    'root': 'Root Letters',
+  };
+  return featureNames[feature] || feature.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
 }
 
 // Main report generation function
 export async function generateReport(sessionId: string): Promise<LearningReport | null> {
   try {
-    // Fetch data in parallel
-    const [observations, sessionDetails] = await Promise.all([
-      fetchSessionObservations(sessionId),
+    // Fetch all data in parallel
+    const [grammarObs, translationObs, sessionDetails] = await Promise.all([
+      fetchGrammarObservations(sessionId),
+      fetchTranslationObservations(sessionId),
       fetchSessionDetails(sessionId),
     ]);
-
-    if (observations.length === 0) {
-      // Return a minimal report if no observations
-      return {
-        sessionSummary: {
-          timeSpent: 0,
-          totalInteractions: 0,
-          overallScore: 50,
-        },
-        strengths: [],
-        weaknesses: [],
-        patterns: [],
-        breakthroughs: [],
-        recommendations: [],
-        generatedAt: new Date(),
-      };
-    }
 
     // Calculate time spent
     let timeSpent = 0;
@@ -380,28 +172,165 @@ export async function generateReport(sessionId: string): Promise<LearningReport 
       timeSpent = Math.round((endTime.getTime() - sessionDetails.startedAt.getTime()) / 60000);
     }
 
-    // Count interactions (each observation roughly = 1 exchange)
-    const totalInteractions = Math.ceil(observations.length / 2);
+    const totalInteractions = grammarObs.length + translationObs.length;
 
-    // Generate report components
-    const strengths = aggregateByCategory(observations, 'strength');
-    const weaknesses = aggregateByCategory(observations, 'weakness');
-    const patterns = detectPatterns(observations);
-    const breakthroughs = extractBreakthroughs(observations);
-    const overallScore = calculateScore(observations);
-    const recommendations = prioritizeRecommendations(weaknesses, patterns);
+    // === GRAMMAR BREAKDOWN ===
+    const grammarByFeature = new Map<string, {
+      total: number;
+      correct: number;
+      mistakes: Map<string, { student: string; correct: string; count: number }>;
+    }>();
+
+    for (const obs of grammarObs) {
+      const feature = obs.grammar_feature;
+      if (!grammarByFeature.has(feature)) {
+        grammarByFeature.set(feature, { total: 0, correct: 0, mistakes: new Map() });
+      }
+      const data = grammarByFeature.get(feature)!;
+      data.total++;
+      if (obs.is_correct) {
+        data.correct++;
+      } else {
+        const key = `${obs.student_answer}→${obs.correct_answer}`;
+        const existing = data.mistakes.get(key);
+        if (existing) {
+          existing.count++;
+        } else {
+          data.mistakes.set(key, { student: obs.student_answer, correct: obs.correct_answer, count: 1 });
+        }
+      }
+    }
+
+    const grammarBreakdown: GrammarBreakdown[] = Array.from(grammarByFeature.entries())
+      .map(([feature, data]) => ({
+        feature: formatFeatureName(feature),
+        total: data.total,
+        correct: data.correct,
+        incorrect: data.total - data.correct,
+        accuracy: data.total > 0 ? Math.round((data.correct / data.total) * 100) : 0,
+        mistakes: Array.from(data.mistakes.values()).sort((a, b) => b.count - a.count).slice(0, 5),
+      }))
+      .sort((a, b) => a.accuracy - b.accuracy); // Sort by accuracy (lowest first = needs work)
+
+    // === TRANSLATION BREAKDOWN ===
+    const translationCorrect = translationObs.filter(o => o.is_correct).length;
+    const translationTotal = translationObs.length;
+
+    // Get struggling words (incorrect translations)
+    const wordMistakes = new Map<number, { student: string; correct: string; count: number }>();
+    const wordSuccesses = new Map<number, { correct: string; count: number }>();
+
+    for (const obs of translationObs) {
+      const wordId = obs.word_id;
+      if (!wordId) continue;
+
+      if (obs.is_correct) {
+        const existing = wordSuccesses.get(wordId);
+        if (existing) {
+          existing.count++;
+        } else {
+          wordSuccesses.set(wordId, { correct: obs.correct_answer, count: 1 });
+        }
+      } else {
+        const existing = wordMistakes.get(wordId);
+        if (existing) {
+          existing.count++;
+        } else {
+          wordMistakes.set(wordId, { student: obs.student_answer, correct: obs.correct_answer, count: 1 });
+        }
+      }
+    }
+
+    // Fetch word details for display
+    const allWordIds = [...new Set([...wordMistakes.keys(), ...wordSuccesses.keys()])];
+    const wordDetails = await fetchWordDetails(allWordIds);
+
+    const strugglingWords: WordMistake[] = Array.from(wordMistakes.entries())
+      .map(([wordId, data]) => ({
+        word_id: wordId,
+        arabic_text: wordDetails.get(wordId)?.arabic,
+        student_answer: data.student,
+        correct_answer: data.correct,
+        count: data.count,
+      }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 10);
+
+    const masteredWords = Array.from(wordSuccesses.entries())
+      .filter(([wordId]) => !wordMistakes.has(wordId)) // Only words never gotten wrong
+      .map(([wordId, data]) => ({
+        word_id: wordId,
+        arabic_text: wordDetails.get(wordId)?.arabic,
+        correct_answer: data.correct,
+        count: data.count,
+      }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 10);
+
+    const translationBreakdown: TranslationBreakdown = {
+      total: translationTotal,
+      correct: translationCorrect,
+      incorrect: translationTotal - translationCorrect,
+      accuracy: translationTotal > 0 ? Math.round((translationCorrect / translationTotal) * 100) : 0,
+      strugglingWords,
+      masteredWords,
+    };
+
+    // === CALCULATE OVERALL SCORE ===
+    const grammarAccuracy = grammarObs.length > 0
+      ? Math.round((grammarObs.filter(o => o.is_correct).length / grammarObs.length) * 100)
+      : 0;
+    const translationAccuracy = translationBreakdown.accuracy;
+
+    // Weighted average: 50% grammar, 50% translation (if both exist)
+    let overallScore = 50; // Default
+    if (grammarObs.length > 0 && translationObs.length > 0) {
+      overallScore = Math.round((grammarAccuracy + translationAccuracy) / 2);
+    } else if (grammarObs.length > 0) {
+      overallScore = grammarAccuracy;
+    } else if (translationObs.length > 0) {
+      overallScore = translationAccuracy;
+    }
+
+    // === TOP STRENGTHS & WEAKNESSES ===
+    const topStrengths: string[] = [];
+    const topWeaknesses: string[] = [];
+
+    // Grammar strengths/weaknesses
+    for (const gb of grammarBreakdown) {
+      if (gb.accuracy >= 80 && gb.total >= 2) {
+        topStrengths.push(`${gb.feature} (${gb.accuracy}% accuracy)`);
+      } else if (gb.accuracy < 60 && gb.total >= 2) {
+        topWeaknesses.push(`${gb.feature} (${gb.accuracy}% accuracy)`);
+      }
+    }
+
+    // Translation strengths/weaknesses
+    if (translationBreakdown.accuracy >= 80 && translationBreakdown.total >= 3) {
+      topStrengths.push(`Vocabulary (${translationBreakdown.accuracy}% accuracy)`);
+    } else if (translationBreakdown.accuracy < 60 && translationBreakdown.total >= 3) {
+      topWeaknesses.push(`Vocabulary (${translationBreakdown.accuracy}% accuracy)`);
+    }
+
+    // Add specific struggling words to weaknesses
+    for (const word of strugglingWords.slice(0, 3)) {
+      if (word.arabic_text) {
+        topWeaknesses.push(`Word: ${word.arabic_text} = "${word.correct_answer}"`);
+      }
+    }
 
     return {
       sessionSummary: {
         timeSpent,
         totalInteractions,
         overallScore,
+        grammarAccuracy,
+        translationAccuracy,
       },
-      strengths,
-      weaknesses,
-      patterns,
-      breakthroughs,
-      recommendations,
+      grammarBreakdown,
+      translationBreakdown,
+      topStrengths: topStrengths.slice(0, 5),
+      topWeaknesses: topWeaknesses.slice(0, 5),
       generatedAt: new Date(),
     };
   } catch (error) {
