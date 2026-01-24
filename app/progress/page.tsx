@@ -143,7 +143,7 @@ export default function ProgressPage() {
           Start a lesson to begin tracking your grammar progress.
         </p>
         <Link
-          href="/learn"
+          href="/diagnostic_chat"
           style={{
             padding: '0.75rem 1.5rem',
             fontSize: '1rem',
@@ -155,7 +155,7 @@ export default function ProgressPage() {
             textDecoration: 'none',
           }}
         >
-          Start Learning
+          Start Diagnostic
         </Link>
       </div>
     );
@@ -230,7 +230,7 @@ export default function ProgressPage() {
           Grammar Progress
         </h1>
         <Link
-          href="/learn"
+          href="/diagnostic_chat"
           style={{
             fontFamily: 'Arial, sans-serif',
             color: '#3b82f6',
@@ -238,7 +238,7 @@ export default function ProgressPage() {
             fontSize: '0.9rem',
           }}
         >
-          Learn →
+          Diagnostic →
         </Link>
       </div>
 
@@ -258,7 +258,7 @@ export default function ProgressPage() {
             Complete some lessons to see your grammar progress here.
           </p>
           <Link
-            href="/learn"
+            href="/diagnostic_chat"
             style={{
               display: 'inline-block',
               padding: '0.75rem 1.5rem',
@@ -270,7 +270,7 @@ export default function ProgressPage() {
               textDecoration: 'none',
             }}
           >
-            Start a Lesson
+            Start Diagnostic
           </Link>
         </div>
       ) : (

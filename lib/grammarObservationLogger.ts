@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { supabaseServer } from './supabase-server';
 
 // Grammar observation - tracks student answers on grammar questions
 export interface GrammarObservation {
@@ -76,7 +77,8 @@ export async function logGrammarObservations(
   let logged = 0;
 
   try {
-    const { error, data } = await supabase
+    // Use server client to bypass RLS
+    const { error, data } = await supabaseServer
       .from('grammar_observations')
       .insert(observations)
       .select();

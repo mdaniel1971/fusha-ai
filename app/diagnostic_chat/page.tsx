@@ -3,19 +3,6 @@
 import { useState, useRef, useEffect } from 'react';
 import LearningReport from '@/components/LearningReport';
 
-// ============================================================
-// VOICE FEATURES - CURRENTLY DISABLED
-// ============================================================
-// Voice input (Whisper) and voice output (ElevenLabs) are commented out
-// to focus on tutor content. To re-enable:
-// 1. Uncomment the recording state variables below
-// 2. Uncomment startRecording/stopRecording functions
-// 3. Uncomment the recording button in the UI
-// 4. Uncomment playAudio function and isPlaying state
-// 5. Uncomment the useEffect that plays audio after response
-// See README.md section "Re-enabling Voice Features" for details
-// ============================================================
-
 interface Message {
   role: 'user' | 'assistant';
   content: string;
@@ -32,38 +19,18 @@ interface TokenUsage {
   model: string;
 }
 
-// ============================================================
-// WHITEBOARD INTERFACE - COMMENTED OUT
-// ============================================================
-/*
-interface WhiteboardContent {
-  word?: string;
-  transliteration?: string;
-  meaning?: string;
-  type?: 'vocabulary' | 'grammar' | 'correction' | 'practice';
-  grammar?: string;
-  root?: string;
-  pattern?: string;
-  conjugation?: Record<string, string>;
-  yourAttempt?: string;
-  correct?: string;
-  prompt?: string;
-}
-*/
-// ============================================================
-
 // Format text to render Arabic in larger Amiri font, English in Arial
 function formatWithArabic(text: string): React.ReactNode {
   const arabicRegex = /([\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]+)/g;
-  
+
   const parts = text.split(arabicRegex);
-  
+
   return parts.map((part, index) => {
     if (arabicRegex.test(part)) {
       arabicRegex.lastIndex = 0;
       return (
-        <span 
-          key={index} 
+        <span
+          key={index}
           style={{
             fontFamily: "'Amiri', 'Traditional Arabic', serif",
             fontSize: '1.4em',
@@ -75,7 +42,7 @@ function formatWithArabic(text: string): React.ReactNode {
       );
     }
     return (
-      <span 
+      <span
         key={index}
         style={{
           fontFamily: "Arial, sans-serif",
@@ -111,39 +78,20 @@ const AVAILABLE_MODELS: ModelOption[] = [
   },
 ];
 
-export default function LessonPage() {
+export default function DiagnosticChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [streamingText, setStreamingText] = useState('');
   const [selectedSurah, setSelectedSurah] = useState<{ id: number; name: string } | null>(null);
-  const [selectedLearningMode, setSelectedLearningMode] = useState<'grammar' | 'translation' | 'mix' | null>(null);
-  const [selectedLevel, setSelectedLevel] = useState<number | null>(null);
-  const [lessonStarted, setLessonStarted] = useState(false);
+  const [chatStarted, setChatStarted] = useState(false);
   const [inputText, setInputText] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [showReport, setShowReport] = useState(false);
   const [selectedModel, setSelectedModel] = useState<string>('claude-haiku-4-5-20251001');
-  const [modelChosen, setModelChosen] = useState(true);
+  const [modelChosen, setModelChosen] = useState(false);
   const [totalSessionCost, setTotalSessionCost] = useState(0);
-  const [lastUsage, setLastUsage] = useState<TokenUsage | null>(null);
 
-  // ============================================================
-  // WHITEBOARD STATE - COMMENTED OUT
-  // ============================================================
-  // const [whiteboard, setWhiteboard] = useState<WhiteboardContent | null>(null);
-  // ============================================================
-
-  // ============================================================
-  // VOICE STATE - COMMENTED OUT
-  // ============================================================
-  // const [isRecording, setIsRecording] = useState(false);
-  // const [isPlaying, setIsPlaying] = useState(false);
-  // const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  // const chunksRef = useRef<Blob[]>([]);
-  // const audioRef = useRef<HTMLAudioElement | null>(null);
-  // ============================================================
-  
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLDivElement>(null);
 
@@ -159,7 +107,7 @@ export default function LessonPage() {
     }
   }, []);
 
-  // Inject CSS for contentEditable styling and animations (client-side only to avoid hydration mismatch)
+  // Inject CSS for contentEditable styling
   useEffect(() => {
     const styleId = 'arabic-input-styles';
     if (!document.getElementById(styleId)) {
@@ -182,7 +130,6 @@ export default function LessonPage() {
       document.head.appendChild(style);
     }
   }, []);
-
 
   // Sync inputText state with contentEditable div and apply Arabic styling
   const handleInputChange = () => {
@@ -246,47 +193,10 @@ export default function LessonPage() {
     setInputText('');
   };
 
-  // Available surahs - start with just Al-Fatiha for testing
+  // Available surahs
   const availableSurahs = [
     { id: 1, name: 'Al-Fatiha', arabicName: 'الفاتحة', verseCount: 7, description: 'The Opening - foundation of Islamic prayer' },
   ];
-
-  // Learning mode options
-  const learningModes = [
-    { id: 'grammar' as const, name: 'Grammar', description: 'Focus on parts of speech, grammatical cases, and verb forms' },
-    { id: 'translation' as const, name: 'Translation', description: 'Focus on word meanings and translations' },
-    { id: 'mix' as const, name: 'Mixed', description: 'Alternate between grammar and translation questions' },
-  ];
-
-  // Difficulty levels with descriptions for each mode
-  const grammarLevels = [
-    { level: 1, name: 'Level 1: Parts of Speech', description: 'Identify nouns, verbs, particles, and prepositions' },
-    { level: 2, name: 'Level 2: Grammatical Cases', description: 'Nominative (marfu\'), accusative (mansub), genitive (majrur)' },
-    { level: 3, name: 'Level 3: Verb Forms', description: 'Identify verb forms I-X (e.g. fa\'ala, fa\'\'ala, af\'ala)' },
-    { level: 4, name: 'Level 4: Roots & Voice', description: 'Extract 3-letter roots and identify active/passive voice' },
-  ];
-
-  const translationLevels = [
-    { level: 1, name: 'Level 1: Single Words', description: 'Translate individual Arabic words to English' },
-    { level: 2, name: 'Level 2: Reverse Translation', description: 'Translate English to Arabic' },
-    { level: 3, name: 'Level 3: Two-Word Phrases', description: 'Translate short phrases from the verses' },
-    { level: 4, name: 'Level 4: Full Phrases', description: 'Translate longer phrases and clauses' },
-  ];
-
-  const mixedLevels = [
-    { level: 1, name: 'Level 1: Basics', description: 'Single word translations + parts of speech' },
-    { level: 2, name: 'Level 2: Intermediate', description: 'Reverse translation + grammatical cases' },
-    { level: 3, name: 'Level 3: Advanced', description: 'Phrases + verb forms (I-X)' },
-    { level: 4, name: 'Level 4: Expert', description: 'Complex phrases + roots & voice' },
-  ];
-
-  const getLevelsForMode = (mode: 'grammar' | 'translation' | 'mix') => {
-    switch (mode) {
-      case 'grammar': return grammarLevels;
-      case 'translation': return translationLevels;
-      case 'mix': return mixedLevels;
-    }
-  };
 
   // Helper to create session record in database
   const createSessionRecord = async (sessionId: string, surahId = 1) => {
@@ -304,14 +214,12 @@ export default function LessonPage() {
     }
   };
 
-  const startLesson = async (surah: { id: number; name: string }, learningMode: 'grammar' | 'translation' | 'mix', level: number) => {
+  const startChat = async (surah: { id: number; name: string }) => {
     // Generate a unique session ID for tracking observations
     const newSessionId = crypto.randomUUID();
     setSessionId(newSessionId);
     setSelectedSurah(surah);
-    setSelectedLearningMode(learningMode);
-    setSelectedLevel(level);
-    setLessonStarted(true);
+    setChatStarted(true);
     setIsLoading(true);
     setError(null);
 
@@ -321,57 +229,16 @@ export default function LessonPage() {
 
       await streamChat([{
         role: 'user',
-        content: `Start a lesson on ${surah.name}.`
-      }], true, surah.id, learningMode, newSessionId, level);
+        content: `Start a diagnostic lesson on ${surah.name}.`
+      }], true, surah.id, newSessionId);
     } catch (err) {
-      console.error('Failed to start lesson:', err);
-      setError('Failed to start lesson. Check console for details.');
+      console.error('Failed to start chat:', err);
+      setError('Failed to start chat. Check console for details.');
     }
     setIsLoading(false);
   };
 
-  // ============================================================
-  // WHITEBOARD PARSING - COMMENTED OUT
-  // ============================================================
-  /*
-  const parseWhiteboardContent = (text: string): { whiteboard: WhiteboardContent | null; speech: string } => {
-    const whiteboardMatch = text.match(/\[WHITEBOARD\]([\s\S]*?)\[\/WHITEBOARD\]/);
-    
-    if (!whiteboardMatch) {
-      return { whiteboard: null, speech: text };
-    }
-    
-    const whiteboardText = whiteboardMatch[1];
-    const speech = text.replace(/\[WHITEBOARD\][\s\S]*?\[\/WHITEBOARD\]/, '').trim();
-    
-    const content: WhiteboardContent = {};
-    const lines = whiteboardText.trim().split('\n');
-    
-    for (const line of lines) {
-      const [key, ...valueParts] = line.split(':');
-      if (key && valueParts.length) {
-        const value = valueParts.join(':').trim();
-        const keyLower = key.trim().toLowerCase();
-        
-        if (keyLower === 'word') content.word = value;
-        else if (keyLower === 'transliteration') content.transliteration = value;
-        else if (keyLower === 'meaning') content.meaning = value;
-        else if (keyLower === 'type') content.type = value as WhiteboardContent['type'];
-        else if (keyLower === 'grammar') content.grammar = value;
-        else if (keyLower === 'root') content.root = value;
-        else if (keyLower === 'pattern') content.pattern = value;
-        else if (keyLower === 'your attempt' || keyLower === 'yourattempt') content.yourAttempt = value;
-        else if (keyLower === 'correct') content.correct = value;
-        else if (keyLower === 'prompt') content.prompt = value;
-      }
-    }
-    
-    return { whiteboard: content, speech };
-  };
-  */
-  // ============================================================
-
-  const streamChat = async (chatMessages: Message[], isSystemMessage = false, surahId?: number, learningMode?: 'grammar' | 'translation' | 'mix', overrideSessionId?: string, level?: number) => {
+  const streamChat = async (chatMessages: Message[], isSystemMessage = false, surahId?: number, overrideSessionId?: string) => {
     setStreamingText('');
     setError(null);
 
@@ -382,10 +249,8 @@ export default function LessonPage() {
         body: JSON.stringify({
           messages: chatMessages,
           surahId: surahId || selectedSurah?.id || 1,
-          learningMode: learningMode || selectedLearningMode || 'mix',
           sessionId: overrideSessionId || sessionId,
           model: selectedModel,
-          startLevel: level || selectedLevel || 1,
         }),
       });
 
@@ -419,20 +284,9 @@ export default function LessonPage() {
               if (parsed.text) {
                 fullText += parsed.text;
                 setStreamingText(fullText);
-
-                // ============================================================
-                // WHITEBOARD PARSING IN STREAM - COMMENTED OUT
-                // ============================================================
-                // const { whiteboard: wb, speech } = parseWhiteboardContent(fullText);
-                // if (wb && Object.keys(wb).length > 0) {
-                //   setWhiteboard(wb);
-                // }
-                // setStreamingText(speech);
-                // ============================================================
               }
               if (parsed.usage) {
                 usageData = parsed.usage;
-                setLastUsage(usageData);
                 setTotalSessionCost(prev => prev + parseFloat(parsed.usage.totalCost));
               }
               if (parsed.error) {
@@ -446,13 +300,6 @@ export default function LessonPage() {
         }
       }
 
-      // ============================================================
-      // WHITEBOARD FINAL PARSE - COMMENTED OUT
-      // ============================================================
-      // const { whiteboard: finalWb, speech: finalSpeech } = parseWhiteboardContent(fullText);
-      // if (finalWb) setWhiteboard(finalWb);
-      // ============================================================
-
       if (fullText) {
         const newMessage: Message = { role: 'assistant', content: fullText, usage: usageData || undefined };
         if (isSystemMessage) {
@@ -461,116 +308,16 @@ export default function LessonPage() {
           setMessages(prev => [...prev, newMessage]);
         }
       }
-      
+
       setStreamingText('');
       return fullText;
-      
+
     } catch (err) {
       console.error('streamChat error:', err);
       setError(err instanceof Error ? err.message : 'Unknown error');
       throw err;
     }
   };
-
-  // ============================================================
-  // VOICE RECORDING FUNCTIONS - COMMENTED OUT
-  // ============================================================
-  /*
-  const startRecording = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mediaRecorder = new MediaRecorder(stream);
-      mediaRecorderRef.current = mediaRecorder;
-      chunksRef.current = [];
-
-      mediaRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) {
-          chunksRef.current.push(e.data);
-        }
-      };
-
-      mediaRecorder.onstop = async () => {
-        const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
-        stream.getTracks().forEach(track => track.stop());
-        await processAudio(blob);
-      };
-
-      mediaRecorder.start();
-      setIsRecording(true);
-    } catch (error) {
-      console.error('Failed to start recording:', error);
-    }
-  };
-
-  const stopRecording = () => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
-      setIsRecording(false);
-    }
-  };
-
-  const processAudio = async (blob: Blob) => {
-    setIsLoading(true);
-    
-    try {
-      const formData = new FormData();
-      formData.append('audio', blob, 'audio.webm');
-      
-      const transcribeRes = await fetch('/api/transcribe', {
-        method: 'POST',
-        body: formData,
-      });
-      
-      if (!transcribeRes.ok) throw new Error('Transcription failed');
-      
-      const { text: userText } = await transcribeRes.json();
-      
-      const userMessage: Message = { role: 'user', content: userText };
-      setMessages(prev => [...prev, userMessage]);
-      
-      const allMessages = [...messages, userMessage];
-      const speech = await streamChat(allMessages);
-      
-      await playAudio(speech);
-      
-    } catch (error) {
-      console.error('Processing error:', error);
-    }
-    
-    setIsLoading(false);
-  };
-
-  const playAudio = async (text: string) => {
-    setIsPlaying(true);
-    
-    try {
-      const response = await fetch('/api/speak-stream', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text }),
-      });
-      
-      if (!response.ok) throw new Error('TTS failed');
-      
-      const audioBlob = await response.blob();
-      const audioUrl = URL.createObjectURL(audioBlob);
-      
-      const audio = new Audio(audioUrl);
-      audioRef.current = audio;
-      
-      audio.onended = () => {
-        setIsPlaying(false);
-        URL.revokeObjectURL(audioUrl);
-      };
-      
-      await audio.play();
-    } catch (error) {
-      console.error('Audio playback error:', error);
-      setIsPlaying(false);
-    }
-  };
-  */
-  // ============================================================
 
   const handleSendText = async () => {
     if (!inputText.trim() || isLoading) return;
@@ -580,14 +327,14 @@ export default function LessonPage() {
     const userMessage: Message = { role: 'user', content: inputText.trim() };
     setMessages(prev => [...prev, userMessage]);
     clearInput();
-    
+
     try {
       const allMessages = [...messages, userMessage];
       await streamChat(allMessages);
     } catch (err) {
       console.error('Failed to send message:', err);
     }
-    
+
     setIsLoading(false);
   };
 
@@ -597,134 +344,6 @@ export default function LessonPage() {
       handleSendText();
     }
   };
-
-  // ============================================================
-  // WHITEBOARD RENDER FUNCTION - COMMENTED OUT
-  // ============================================================
-  /*
-  const renderWhiteboard = () => {
-    if (!whiteboard) return null;
-    
-    return (
-      <div style={{
-        backgroundColor: '#1a1a2e',
-        color: '#fff',
-        padding: '2rem',
-        borderRadius: '12px',
-        marginBottom: '1rem',
-        fontFamily: 'system-ui, sans-serif',
-      }}>
-        {whiteboard.word && (
-          <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
-            <div style={{ 
-              fontSize: '3rem', 
-              fontFamily: "'Amiri', 'Traditional Arabic', serif",
-              marginBottom: '0.5rem',
-              direction: 'rtl',
-            }}>
-              {whiteboard.word}
-            </div>
-            {whiteboard.transliteration && (
-              <div style={{ fontSize: '1.25rem', color: '#94a3b8', marginBottom: '0.25rem' }}>
-                {whiteboard.transliteration}
-              </div>
-            )}
-            {whiteboard.meaning && (
-              <div style={{ fontSize: '1.1rem', color: '#60a5fa' }}>
-                "{whiteboard.meaning}"
-              </div>
-            )}
-          </div>
-        )}
-        
-        {(whiteboard.grammar || whiteboard.root || whiteboard.pattern) && (
-          <div style={{ 
-            backgroundColor: 'rgba(255,255,255,0.1)', 
-            padding: '1rem', 
-            borderRadius: '8px',
-            marginBottom: '1rem',
-          }}>
-            {whiteboard.grammar && (
-              <div style={{ marginBottom: '0.5rem' }}>
-                <span style={{ color: '#94a3b8' }}>Form: </span>
-                <span style={{ color: '#fbbf24' }}>{whiteboard.grammar}</span>
-              </div>
-            )}
-            {whiteboard.root && (
-              <div style={{ marginBottom: '0.5rem' }}>
-                <span style={{ color: '#94a3b8' }}>Root: </span>
-                <span style={{ fontFamily: "'Amiri', serif", fontSize: '1.2rem' }}>{whiteboard.root}</span>
-              </div>
-            )}
-            {whiteboard.pattern && (
-              <div>
-                <span style={{ color: '#94a3b8' }}>Pattern: </span>
-                <span style={{ fontFamily: "'Amiri', serif" }}>{whiteboard.pattern}</span>
-              </div>
-            )}
-          </div>
-        )}
-        
-        {whiteboard.type === 'correction' && (
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: '1fr 1fr',
-            gap: '1rem',
-          }}>
-            {whiteboard.yourAttempt && (
-              <div style={{ 
-                backgroundColor: 'rgba(239, 68, 68, 0.2)', 
-                padding: '1rem', 
-                borderRadius: '8px',
-                borderLeft: '3px solid #ef4444',
-              }}>
-                <div style={{ color: '#94a3b8', fontSize: '0.85rem', marginBottom: '0.5rem' }}>
-                  Your attempt
-                </div>
-                <div style={{ fontFamily: "'Amiri', serif", fontSize: '1.2rem' }}>
-                  {whiteboard.yourAttempt}
-                </div>
-              </div>
-            )}
-            {whiteboard.correct && (
-              <div style={{ 
-                backgroundColor: 'rgba(34, 197, 94, 0.2)', 
-                padding: '1rem', 
-                borderRadius: '8px',
-                borderLeft: '3px solid #22c55e',
-              }}>
-                <div style={{ color: '#94a3b8', fontSize: '0.85rem', marginBottom: '0.5rem' }}>
-                  Correct
-                </div>
-                <div style={{ fontFamily: "'Amiri', serif", fontSize: '1.2rem' }}>
-                  {whiteboard.correct}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-        
-        {whiteboard.prompt && (
-          <div style={{
-            backgroundColor: 'rgba(96, 165, 250, 0.2)',
-            padding: '1rem',
-            borderRadius: '8px',
-            borderLeft: '3px solid #60a5fa',
-            marginTop: '1rem',
-          }}>
-            <div style={{ color: '#94a3b8', fontSize: '0.85rem', marginBottom: '0.5rem' }}>
-              Practice
-            </div>
-            <div style={{ fontSize: '1.1rem' }}>
-              {whiteboard.prompt}
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  };
-  */
-  // ============================================================
 
   return (
     <>
@@ -748,7 +367,7 @@ export default function LessonPage() {
           color: '#1a1a1a',
           fontFamily: 'Arial, sans-serif',
         }}>
-          FushaAI Lesson
+          FushaAI Diagnostic
         </h1>
 
         {/* Error display */}
@@ -766,8 +385,8 @@ export default function LessonPage() {
           </div>
         )}
 
-        {/* Model and Level selection screen */}
-        {!lessonStarted ? (
+        {/* Selection screens */}
+        {!chatStarted ? (
           <div style={{
             flex: 1,
             display: 'flex',
@@ -800,7 +419,7 @@ export default function LessonPage() {
                   textAlign: 'center',
                   maxWidth: '400px',
                 }}>
-                  Select which Claude model to use for this lesson
+                  Select which Claude model to use for this diagnostic
                 </p>
                 <div style={{
                   display: 'flex',
@@ -846,8 +465,8 @@ export default function LessonPage() {
                   ))}
                 </div>
               </div>
-            ) : !selectedSurah ? (
-              /* Surah Selection - shown after mode selection */
+            ) : (
+              /* Surah Selection - shown after model selection */
               <div style={{
                 display: 'flex',
                 flexDirection: 'column',
@@ -861,7 +480,7 @@ export default function LessonPage() {
                   marginBottom: '0.5rem',
                 }}>
                   <button
-                    onClick={() => window.location.href = '/learn'}
+                    onClick={() => setModelChosen(false)}
                     style={{
                       background: 'none',
                       border: 'none',
@@ -901,7 +520,7 @@ export default function LessonPage() {
                   {availableSurahs.map((surah) => (
                     <button
                       key={surah.id}
-                      onClick={() => setSelectedSurah({ id: surah.id, name: surah.name })}
+                      onClick={() => startChat({ id: surah.id, name: surah.name })}
                       style={{
                         padding: '1.5rem',
                         fontSize: '1rem',
@@ -937,210 +556,10 @@ export default function LessonPage() {
                   ))}
                 </div>
               </div>
-            ) : selectedSurah && !selectedLearningMode ? (
-              /* Learning Mode Selection - shown after surah selection */
-              <div style={{
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                gap: '1rem',
-              }}>
-                <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem',
-                  marginBottom: '0.5rem',
-                }}>
-                  <button
-                    onClick={() => setSelectedSurah(null)}
-                    style={{
-                      background: 'none',
-                      border: 'none',
-                      color: '#3b82f6',
-                      cursor: 'pointer',
-                      fontSize: '1.5rem',
-                      padding: '0.25rem',
-                      lineHeight: 1,
-                    }}
-                  >
-                    &#8592;
-                  </button>
-                  <h2 style={{
-                    fontFamily: 'Arial, sans-serif',
-                    margin: 0,
-                    color: '#333',
-                  }}>
-                    What do you want to practice?
-                  </h2>
-                </div>
-                <p style={{
-                  fontFamily: 'Arial, sans-serif',
-                  color: '#666',
-                  fontSize: '0.9rem',
-                  marginBottom: '0.5rem',
-                  textAlign: 'center',
-                }}>
-                  <span style={{
-                    fontFamily: "'Amiri', 'Traditional Arabic', serif",
-                    fontSize: '1.2rem',
-                  }}>{availableSurahs.find(s => s.id === selectedSurah.id)?.arabicName}</span>
-                  {' '}{selectedSurah.name}
-                </p>
-                <div style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '0.75rem',
-                  width: '100%',
-                  maxWidth: '400px',
-                }}>
-                  {learningModes.map((mode) => (
-                    <button
-                      key={mode.id}
-                      onClick={() => setSelectedLearningMode(mode.id)}
-                      style={{
-                        padding: '1.5rem',
-                        fontSize: '1rem',
-                        fontFamily: 'Arial, sans-serif',
-                        backgroundColor: '#fff',
-                        border: '2px solid #ddd',
-                        borderRadius: '12px',
-                        cursor: 'pointer',
-                        textAlign: 'left',
-                        transition: 'all 0.2s ease',
-                      }}
-                      onMouseEnter={(e) => {
-                        (e.currentTarget as HTMLButtonElement).style.borderColor = '#3b82f6';
-                        (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#f0f7ff';
-                      }}
-                      onMouseLeave={(e) => {
-                        (e.currentTarget as HTMLButtonElement).style.borderColor = '#ddd';
-                        (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#fff';
-                      }}
-                    >
-                      <div style={{ fontWeight: 'bold', marginBottom: '0.5rem' }}>
-                        {mode.name}
-                      </div>
-                      <div style={{ color: '#666', fontSize: '0.9rem' }}>
-                        {mode.description}
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ) : selectedSurah && selectedLearningMode ? (
-              /* Level Selection - shown after learning mode selection */
-              <div style={{
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                gap: '1rem',
-              }}>
-                <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem',
-                  marginBottom: '0.5rem',
-                }}>
-                  <button
-                    onClick={() => setSelectedLearningMode(null)}
-                    style={{
-                      background: 'none',
-                      border: 'none',
-                      color: '#3b82f6',
-                      cursor: 'pointer',
-                      fontSize: '1.5rem',
-                      padding: '0.25rem',
-                      lineHeight: 1,
-                    }}
-                  >
-                    &#8592;
-                  </button>
-                  <h2 style={{
-                    fontFamily: 'Arial, sans-serif',
-                    margin: 0,
-                    color: '#333',
-                  }}>
-                    Choose your level
-                  </h2>
-                </div>
-                <p style={{
-                  fontFamily: 'Arial, sans-serif',
-                  color: '#666',
-                  fontSize: '0.9rem',
-                  marginBottom: '0.5rem',
-                  textAlign: 'center',
-                }}>
-                  {selectedLearningMode === 'grammar' ? 'Grammar' : selectedLearningMode === 'translation' ? 'Translation' : 'Mixed'} practice on{' '}
-                  <span style={{
-                    fontFamily: "'Amiri', 'Traditional Arabic', serif",
-                    fontSize: '1.2rem',
-                  }}>{availableSurahs.find(s => s.id === selectedSurah.id)?.arabicName}</span>
-                </p>
-                {/* Answer format hint */}
-                <div style={{
-                  backgroundColor: '#f0f7ff',
-                  border: '1px solid #bfdbfe',
-                  borderRadius: '8px',
-                  padding: '0.75rem 1rem',
-                  marginBottom: '0.5rem',
-                  maxWidth: '400px',
-                  width: '100%',
-                }}>
-                  <p style={{
-                    fontFamily: 'Arial, sans-serif',
-                    color: '#1e40af',
-                    fontSize: '0.85rem',
-                    margin: 0,
-                    lineHeight: 1.5,
-                  }}>
-                    <strong>Tip:</strong> Arabic answers can be in Arabic script or transliteration. Grammar terms can be in English or Arabic (e.g., nominative/marfu', genitive/majrur).
-                  </p>
-                </div>
-                <div style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '0.75rem',
-                  width: '100%',
-                  maxWidth: '400px',
-                }}>
-                  {getLevelsForMode(selectedLearningMode).map((levelOption) => (
-                    <button
-                      key={levelOption.level}
-                      onClick={() => startLesson(selectedSurah, selectedLearningMode, levelOption.level)}
-                      style={{
-                        padding: '1.25rem',
-                        fontSize: '1rem',
-                        fontFamily: 'Arial, sans-serif',
-                        backgroundColor: '#fff',
-                        border: '2px solid #ddd',
-                        borderRadius: '12px',
-                        cursor: 'pointer',
-                        textAlign: 'left',
-                        transition: 'all 0.2s ease',
-                      }}
-                      onMouseEnter={(e) => {
-                        (e.currentTarget as HTMLButtonElement).style.borderColor = '#3b82f6';
-                        (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#f0f7ff';
-                      }}
-                      onMouseLeave={(e) => {
-                        (e.currentTarget as HTMLButtonElement).style.borderColor = '#ddd';
-                        (e.currentTarget as HTMLButtonElement).style.backgroundColor = '#fff';
-                      }}
-                    >
-                      <div style={{ fontWeight: 'bold', marginBottom: '0.25rem' }}>
-                        {levelOption.name}
-                      </div>
-                      <div style={{ color: '#666', fontSize: '0.85rem' }}>
-                        {levelOption.description}
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ) : null}
+            )}
           </div>
         ) : (
-          /* Traditional Lesson Mode */
+          /* Diagnostic Chat */
           <>
             {/* Header with back button */}
             <div style={{
@@ -1152,12 +571,11 @@ export default function LessonPage() {
             }}>
               <button
                 onClick={() => {
-                  setLessonStarted(false);
+                  setChatStarted(false);
                   setMessages([]);
-                  setSelectedLearningMode(null);
-                  setSelectedLevel(null);
                   setTotalSessionCost(0);
                   setSessionId(null);
+                  setSelectedSurah(null);
                 }}
                 style={{
                   background: 'none',
@@ -1182,16 +600,10 @@ export default function LessonPage() {
                   fontSize: '0.9rem',
                   color: '#666',
                 }}>
-                  {selectedLearningMode === 'grammar' ? 'Grammar' : selectedLearningMode === 'translation' ? 'Translation' : 'Mixed'}
+                  Diagnostic
                 </span>
               </div>
             </div>
-
-            {/* ============================================================
-                WHITEBOARD AREA - COMMENTED OUT
-                ============================================================
-            {renderWhiteboard()}
-            ============================================================ */}
 
             {/* Chat area with tip sidebar */}
             <div style={{
@@ -1209,16 +621,16 @@ export default function LessonPage() {
                 borderRadius: '8px',
               }}>
               {isLoading && messages.length === 0 && !streamingText && (
-                <div style={{ 
-                  textAlign: 'center', 
+                <div style={{
+                  textAlign: 'center',
                   color: '#666',
                   fontFamily: 'Arial, sans-serif',
                   padding: '2rem',
                 }}>
-                  Loading lesson...
+                  Loading diagnostic...
                 </div>
               )}
-              
+
               {messages.map((message, index) => (
                 <div
                   key={index}
@@ -1282,16 +694,16 @@ export default function LessonPage() {
                     marginRight: '2rem',
                   }}
                 >
-                  <p style={{ 
-                    margin: '0 0 0.5rem', 
-                    fontSize: '0.75rem', 
+                  <p style={{
+                    margin: '0 0 0.5rem',
+                    fontSize: '0.75rem',
                     color: '#666',
                     fontWeight: 'bold',
                     fontFamily: 'Arial, sans-serif',
                   }}>
                     Teacher
                   </p>
-                  <p style={{ 
+                  <p style={{
                     margin: 0,
                     lineHeight: 1.6,
                     whiteSpace: 'pre-wrap',
@@ -1301,20 +713,6 @@ export default function LessonPage() {
                   </p>
                 </div>
               )}
-
-              {/* ============================================================
-                  VOICE PLAYING INDICATOR - COMMENTED OUT
-                  ============================================================
-              {isPlaying && !streamingText && (
-                <div style={{ 
-                  padding: '0.5rem 1rem',
-                  color: '#666',
-                  fontSize: '0.85rem',
-                }}>
-                  🔊 Speaking...
-                </div>
-              )}
-              ============================================================ */}
 
               <div ref={messagesEndRef} />
               </div>
@@ -1435,44 +833,6 @@ export default function LessonPage() {
                 Generate Learning Report
               </button>
             </div>
-
-            {/* ============================================================
-                VOICE RECORDING CONTROLS - COMMENTED OUT
-                ============================================================
-            <div style={{
-              padding: '1rem',
-              borderTop: '1px solid #eee',
-              display: 'flex',
-              justifyContent: 'center',
-              gap: '1rem',
-            }}>
-              <button
-                onClick={isRecording ? stopRecording : startRecording}
-                disabled={isLoading || isPlaying}
-                style={{
-                  padding: '1rem 2rem',
-                  fontSize: '1rem',
-                  backgroundColor: isRecording ? '#dc2626' : '#1a1a1a',
-                  color: '#fff',
-                  border: 'none',
-                  borderRadius: '50px',
-                  cursor: (isLoading || isPlaying) ? 'not-allowed' : 'pointer',
-                  opacity: (isLoading || isPlaying) ? 0.5 : 1,
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem',
-                }}
-              >
-                <span style={{
-                  width: '12px',
-                  height: '12px',
-                  borderRadius: '50%',
-                  backgroundColor: isRecording ? '#fff' : '#dc2626',
-                }} />
-                {isRecording ? 'Stop' : 'Speak'}
-              </button>
-            </div>
-            ============================================================ */}
           </>
         )}
 

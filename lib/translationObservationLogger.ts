@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { supabaseServer } from './supabase-server';
 
 // Translation observation - tracks student answers on word translations
 export interface TranslationObservation {
@@ -61,7 +62,8 @@ export async function logTranslationObservations(
   let logged = 0;
 
   try {
-    const { error, data } = await supabase
+    // Use server client to bypass RLS
+    const { error, data } = await supabaseServer
       .from('translation_observations')
       .insert(observations)
       .select();
