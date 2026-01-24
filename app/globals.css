@@ -1,3 +1,6 @@
+/* Import Amiri font for Arabic text */
+@import url('https://fonts.googleapis.com/css2?family=Amiri:wght@400;700&display=swap');
+
 /* Global styles for FushaAI */
 
 * {
@@ -14,9 +17,14 @@ body {
   color: #1a1a1a;
 }
 
+/* CSS variable for Amiri font */
+:root {
+  --font-amiri: 'Amiri', 'Traditional Arabic', 'Scheherazade New', serif;
+}
+
 /* Arabic text should use a good Arabic font */
 .arabic {
-  font-family: var(--font-amiri), 'Traditional Arabic', 'Scheherazade New', serif;
+  font-family: var(--font-amiri);
   direction: rtl;
   font-size: 3em;
   line-height: 2;

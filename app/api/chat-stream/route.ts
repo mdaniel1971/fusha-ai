@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 import { NextRequest } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { createClient } from "@supabase/supabase-js";
@@ -9,7 +10,12 @@ import {
   parseTranslationObservations,
   logTranslationObservations,
 } from "@/lib/translationObservationLogger";
-import { loadLearnerContext, buildContextPrompt, canSendMessage, incrementUsage } from "@/lib/db";
+import {
+  loadLearnerContext,
+  buildContextPrompt,
+  canSendMessage,
+  incrementUsage,
+} from "@/lib/db";
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY!,
@@ -241,7 +247,8 @@ Use this information to personalize the diagnostic:
 - Reference previous lessons for continuity`;
     }
 
-    const systemPrompt = DIAGNOSTIC_PROMPT + learnerContextPrompt + "\n" + surahPrompt;
+    const systemPrompt =
+      DIAGNOSTIC_PROMPT + learnerContextPrompt + "\n" + surahPrompt;
 
     const claudeMessages = messages.map(
       (msg: { role: string; content: string }) => ({
@@ -311,7 +318,11 @@ Use this information to personalize the diagnostic:
           let quotaInfo = null;
           if (userId && lessonId) {
             const totalTokens = usage.input_tokens + usage.output_tokens;
-            const usageResult = await incrementUsage(userId, lessonId, totalTokens);
+            const usageResult = await incrementUsage(
+              userId,
+              lessonId,
+              totalTokens,
+            );
             quotaInfo = {
               messagesRemaining: usageResult.messagesRemaining,
             };

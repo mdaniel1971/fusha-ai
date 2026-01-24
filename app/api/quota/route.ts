@@ -1,5 +1,6 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { getQuotaInfo } from '@/lib/db';
+export const dynamic = "force-dynamic";
+import { NextRequest, NextResponse } from "next/server";
+import { getQuotaInfo } from "@/lib/db";
 
 /**
  * GET /api/quota?userId=xxx
@@ -9,12 +10,12 @@ import { getQuotaInfo } from '@/lib/db';
  */
 export async function GET(request: NextRequest) {
   try {
-    const userId = request.nextUrl.searchParams.get('userId');
+    const userId = request.nextUrl.searchParams.get("userId");
 
     if (!userId) {
       return NextResponse.json(
-        { error: 'userId query parameter is required' },
-        { status: 400 }
+        { error: "userId query parameter is required" },
+        { status: 400 },
       );
     }
 
@@ -29,10 +30,10 @@ export async function GET(request: NextRequest) {
       resetDate: quota.resetDate.toISOString(),
     });
   } catch (error) {
-    console.error('Error getting quota info:', error);
+    console.error("Error getting quota info:", error);
     return NextResponse.json(
-      { error: 'Failed to get quota info' },
-      { status: 500 }
+      { error: "Failed to get quota info" },
+      { status: 500 },
     );
   }
 }
