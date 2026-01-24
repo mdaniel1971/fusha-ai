@@ -1,7 +1,7 @@
 export const dynamic = "force-dynamic";
 import { NextRequest } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
-import { createClient } from "@supabase/supabase-js";
+import { supabase } from "@/lib/supabase";
 import {
   parseGrammarObservations,
   logGrammarObservations,
@@ -17,14 +17,16 @@ import {
   incrementUsage,
 } from "@/lib/db";
 
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY!,
-});
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-);
+// Lazy initialization of Anthropic client
+let anthropicInstance: Anthropic | null = null;
+function getAnthropic(): Anthropic {
+  if (!anthropicInstance) {
+    anthropicInstance = new Anthropic({
+      apiKey: process.env.ANTHROPIC_API_KEY!,
+    });
+  }
+  return anthropicInstance;
+}
 
 // Fetch verses and words for a surah (up to 20 words)
 async function fetchSurahData(surahId: number, maxWords = 20) {
@@ -268,7 +270,7 @@ Use this information to personalize the diagnostic:
     const stream = new ReadableStream({
       async start(controller) {
         try {
-          const response = await anthropic.messages.stream({
+          const response = await getAnthropic().messages.stream({
             model,
             max_tokens: 512,
             system: systemPrompt,
