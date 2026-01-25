@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import LearningReport from '@/components/LearningReport';
+import LogoutButton from '@/components/LogoutButton';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -397,17 +398,28 @@ export default function DiagnosticChatClient() {
           flexDirection: 'column',
         }}
       >
-        <h1
+        <div
           style={{
-            textAlign: 'center',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
             marginBottom: '1rem',
-            fontSize: '1.5rem',
-            color: '#1a1a1a',
-            fontFamily: 'Arial, sans-serif',
           }}
         >
-          FushaAI Diagnostic
-        </h1>
+          <div style={{ width: '80px' }} /> {/* Spacer for centering */}
+          <h1
+            style={{
+              textAlign: 'center',
+              fontSize: '1.5rem',
+              color: '#1a1a1a',
+              fontFamily: 'Arial, sans-serif',
+              margin: 0,
+            }}
+          >
+            FushaAI Diagnostic
+          </h1>
+          <LogoutButton />
+        </div>
 
         {/* Error display */}
         {error && (

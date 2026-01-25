@@ -8,7 +8,8 @@
       "Bash(find:*)",
       "Bash(curl:*)",
       "Bash(tree:*)",
-      "Bash(npx supabase:*)"
+      "Bash(npx supabase:*)",
+      "Bash(npm install:*)"
     ]
   }
 }
