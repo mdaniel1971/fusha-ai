@@ -12,21 +12,59 @@ import type {
 /**
  * Analyzes a completed lesson and extracts/updates learner facts.
  * This is the "memory extraction" system that synthesizes observations into insights.
+ * @param lessonId - The lesson/session ID (used to find observations)
+ * @param providedUserId - Optional user ID (if not provided, will be fetched from lesson)
  */
-export async function extractLessonFacts(lessonId: string): Promise<LessonAnalysis | null> {
-  // First, get the lesson to get the user_id
-  const { data: lesson, error: lessonError } = await supabase
-    .from('lessons')
-    .select('id, user_id')
-    .eq('id', lessonId)
-    .single();
+export async function extractLessonFacts(
+  lessonId: string,
+  providedUserId?: string
+): Promise<LessonAnalysis | null> {
+  let userId = providedUserId;
 
-  if (lessonError || !lesson) {
-    console.error('Error fetching lesson:', lessonError);
-    return null;
+  // If no userId provided, try to get it from the lesson
+  if (!userId) {
+    const { data: lesson, error: lessonError } = await supabase
+      .from('lessons')
+      .select('id, user_id')
+      .eq('id', lessonId)
+      .single();
+
+    if (lesson) {
+      userId = lesson.user_id;
+    } else {
+      console.log('Lesson not found, trying to get userId from observations');
+      // Try to get userId from observations instead
+      const { data: obs } = await supabase
+        .from('grammar_observations')
+        .select('user_id')
+        .eq('session_id', lessonId)
+        .not('user_id', 'is', null)
+        .limit(1)
+        .single();
+
+      if (obs?.user_id) {
+        userId = obs.user_id;
+      } else {
+        // Try translation observations
+        const { data: transObs } = await supabase
+          .from('translation_observations')
+          .select('user_id')
+          .eq('session_id', lessonId)
+          .not('user_id', 'is', null)
+          .limit(1)
+          .single();
+
+        if (transObs?.user_id) {
+          userId = transObs.user_id;
+        }
+      }
+    }
   }
 
-  const userId = lesson.user_id;
+  if (!userId) {
+    console.error('Could not determine userId for lesson:', lessonId);
+    return null;
+  }
 
   // Fetch all observations from this lesson
   const [grammarObs, translationObs] = await Promise.all([
@@ -146,13 +184,17 @@ function analyzeGrammarObservations(observations: GrammarObservation[]): Extract
   }
 
   // Extract facts based on patterns
+  console.log('Analyzing grammar observations by feature:', Object.fromEntries(byFeature));
+
   for (const [feature, data] of byFeature) {
     const total = data.correct + data.incorrect;
     const accuracy = (data.correct / total) * 100;
     const featureName = formatFeatureName(feature);
 
-    // Struggle: accuracy < 50% with at least 2 observations
-    if (accuracy < 50 && total >= 2) {
+    console.log(`Feature ${feature}: ${data.correct}/${total} correct (${accuracy.toFixed(0)}%)`);
+
+    // Struggle: accuracy < 60% with at least 1 observation
+    if (accuracy < 60 && total >= 1 && data.incorrect > 0) {
       facts.push({
         factType: 'struggle',
         factText: `Struggles with ${featureName}`,
@@ -162,8 +204,8 @@ function analyzeGrammarObservations(observations: GrammarObservation[]): Extract
       });
     }
 
-    // Strength: accuracy >= 80% with at least 3 observations
-    if (accuracy >= 80 && total >= 3) {
+    // Strength: accuracy >= 75% with at least 2 observations
+    if (accuracy >= 75 && total >= 2) {
       facts.push({
         factType: 'strength',
         factText: `Strong understanding of ${featureName}`,
@@ -208,11 +250,14 @@ function analyzeTranslationObservations(observations: TranslationObservation[]):
   if (observations.length === 0) return facts;
 
   const correct = observations.filter(o => o.is_correct).length;
+  const incorrect = observations.filter(o => !o.is_correct).length;
   const total = observations.length;
   const accuracy = (correct / total) * 100;
 
-  // Overall vocabulary assessment
-  if (accuracy < 50 && total >= 3) {
+  console.log(`Translation observations: ${correct}/${total} correct (${accuracy.toFixed(0)}%)`);
+
+  // Overall vocabulary assessment - lowered thresholds for testing
+  if (accuracy < 60 && total >= 1 && incorrect > 0) {
     facts.push({
       factType: 'struggle',
       factText: 'Needs more vocabulary practice',
@@ -220,7 +265,7 @@ function analyzeTranslationObservations(observations: TranslationObservation[]):
       arabicExamples: [],
       isNew: true,
     });
-  } else if (accuracy >= 80 && total >= 3) {
+  } else if (accuracy >= 75 && total >= 2) {
     facts.push({
       factType: 'strength',
       factText: 'Good vocabulary retention',
@@ -230,7 +275,7 @@ function analyzeTranslationObservations(observations: TranslationObservation[]):
     });
   }
 
-  // Track specific words that were missed repeatedly
+  // Track specific words that were missed
   const missedWords = new Map<string, { arabic: string; count: number }>();
   for (const obs of observations) {
     if (!obs.is_correct && obs.correct_answer) {
@@ -242,9 +287,9 @@ function analyzeTranslationObservations(observations: TranslationObservation[]):
     }
   }
 
-  // Add specific word struggles
+  // Add specific word struggles - lowered from 2 to 1 for testing
   const frequentlyMissed = Array.from(missedWords.values())
-    .filter(w => w.count >= 2)
+    .filter(w => w.count >= 1)
     .sort((a, b) => b.count - a.count)
     .slice(0, 3);
 

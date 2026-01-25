@@ -5,14 +5,32 @@ import type { LearningReport, GrammarBreakdown, TranslationBreakdown, WordMistak
 
 interface LearningReportProps {
   sessionId: string;
+  lessonId?: string;
+  userId?: string;
   onClose: () => void;
+}
+
+interface LearnerFact {
+  id: string;
+  fact_type: 'struggle' | 'strength' | 'interest' | 'personal' | 'preference';
+  fact_text: string;
+  category: string | null;
+  arabic_examples: string[] | null;
+  observation_count: number;
+  success_count: number;
 }
 
 interface ReportWithMessage extends LearningReport {
   motivationalMessage: string;
+  learnerFacts?: LearnerFact[];
+  analysisResults?: {
+    performanceSummary: string;
+    newFactsCount: number;
+    updatedFactsCount: number;
+  };
 }
 
-export default function LearningReportComponent({ sessionId, onClose }: LearningReportProps) {
+export default function LearningReportComponent({ sessionId, lessonId, userId, onClose }: LearningReportProps) {
   const [report, setReport] = useState<ReportWithMessage | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -24,7 +42,7 @@ export default function LearningReportComponent({ sessionId, onClose }: Learning
         const response = await fetch('/api/report', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sessionId }),
+          body: JSON.stringify({ sessionId, lessonId, userId }),
         });
 
         if (!response.ok) {
@@ -57,7 +75,7 @@ export default function LearningReportComponent({ sessionId, onClose }: Learning
     }
 
     fetchReport();
-  }, [sessionId]);
+  }, [sessionId, lessonId, userId]);
 
   if (loading) {
     return (
@@ -166,6 +184,31 @@ export default function LearningReportComponent({ sessionId, onClose }: Learning
             </section>
           )}
 
+          {/* Learner Profile - extracted facts */}
+          {report.learnerFacts && report.learnerFacts.length > 0 && (
+            <section style={styles.section}>
+              <h3 style={{ ...styles.sectionTitle, color: '#6366f1' }}>
+                Your Learning Profile
+              </h3>
+              {report.analysisResults && (
+                <p style={{ fontSize: '0.85rem', color: '#666', marginBottom: '1rem' }}>
+                  {report.analysisResults.newFactsCount > 0 && (
+                    <span style={{ color: '#22c55e' }}>
+                      +{report.analysisResults.newFactsCount} new insights discovered
+                    </span>
+                  )}
+                  {report.analysisResults.newFactsCount > 0 && report.analysisResults.updatedFactsCount > 0 && ' | '}
+                  {report.analysisResults.updatedFactsCount > 0 && (
+                    <span style={{ color: '#3b82f6' }}>
+                      {report.analysisResults.updatedFactsCount} patterns confirmed
+                    </span>
+                  )}
+                </p>
+              )}
+              <LearnerFactsDisplay facts={report.learnerFacts} />
+            </section>
+          )}
+
           {/* Empty State */}
           {!hasData && (
             <div style={styles.emptyState}>
@@ -259,6 +302,68 @@ function VocabularyCard({ breakdown }: { breakdown: TranslationBreakdown }) {
             ))}
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+// Learner Facts display component
+function LearnerFactsDisplay({ facts }: { facts: LearnerFact[] }) {
+  const struggles = facts.filter(f => f.fact_type === 'struggle');
+  const strengths = facts.filter(f => f.fact_type === 'strength');
+
+  return (
+    <div style={styles.factsContainer}>
+      {/* Struggles */}
+      {struggles.length > 0 && (
+        <div style={styles.factsSection}>
+          <p style={{ ...styles.factsSectionTitle, color: '#ef4444' }}>Areas to Focus On:</p>
+          {struggles.map((fact, i) => (
+            <div key={i} style={styles.factItem}>
+              <span style={styles.factBullet}>●</span>
+              <div>
+                <span style={styles.factText}>{fact.fact_text}</span>
+                {fact.category && (
+                  <span style={styles.factCategory}>{fact.category}</span>
+                )}
+                {fact.arabic_examples && fact.arabic_examples.length > 0 && (
+                  <div style={styles.factExamples}>
+                    {fact.arabic_examples.slice(0, 2).map((ex, j) => (
+                      <span key={j} style={styles.arabicExample}>{ex}</span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Strengths */}
+      {strengths.length > 0 && (
+        <div style={styles.factsSection}>
+          <p style={{ ...styles.factsSectionTitle, color: '#22c55e' }}>Your Strengths:</p>
+          {strengths.map((fact, i) => (
+            <div key={i} style={styles.factItem}>
+              <span style={{ ...styles.factBullet, color: '#22c55e' }}>★</span>
+              <div>
+                <span style={styles.factText}>{fact.fact_text}</span>
+                {fact.category && (
+                  <span style={{ ...styles.factCategory, background: '#dcfce7', color: '#166534' }}>
+                    {fact.category}
+                  </span>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Observation count summary */}
+      {facts.length > 0 && (
+        <p style={styles.factsSummary}>
+          Based on {facts.reduce((sum, f) => sum + f.observation_count, 0)} observations
+        </p>
       )}
     </div>
   );
@@ -548,5 +653,64 @@ const styles: { [key: string]: React.CSSProperties } = {
     textAlign: 'center',
     padding: '2rem',
     color: '#666',
+  },
+  // Learner Facts styles
+  factsContainer: {
+    padding: '1rem',
+    background: '#f8f9fa',
+    borderRadius: '12px',
+  },
+  factsSection: {
+    marginBottom: '1rem',
+  },
+  factsSectionTitle: {
+    fontSize: '0.9rem',
+    fontWeight: 600,
+    marginBottom: '0.75rem',
+  },
+  factItem: {
+    display: 'flex',
+    gap: '0.5rem',
+    marginBottom: '0.5rem',
+    alignItems: 'flex-start',
+  },
+  factBullet: {
+    color: '#ef4444',
+    fontSize: '0.6rem',
+    marginTop: '0.3rem',
+  },
+  factText: {
+    fontSize: '0.9rem',
+    color: '#333',
+  },
+  factCategory: {
+    fontSize: '0.7rem',
+    background: '#fee2e2',
+    color: '#dc2626',
+    padding: '0.125rem 0.5rem',
+    borderRadius: '999px',
+    marginLeft: '0.5rem',
+  },
+  factExamples: {
+    display: 'flex',
+    gap: '0.5rem',
+    marginTop: '0.25rem',
+    flexWrap: 'wrap',
+  },
+  arabicExample: {
+    fontFamily: "'Amiri', 'Traditional Arabic', serif",
+    fontSize: '1rem',
+    color: '#666',
+    background: '#f0f0f0',
+    padding: '0.125rem 0.5rem',
+    borderRadius: '4px',
+  },
+  factsSummary: {
+    fontSize: '0.75rem',
+    color: '#999',
+    textAlign: 'center',
+    marginTop: '1rem',
+    paddingTop: '0.75rem',
+    borderTop: '1px solid #e5e7eb',
   },
 };

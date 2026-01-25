@@ -1,19 +1,25 @@
 export const dynamic = 'force-dynamic';
 import { NextRequest } from 'next/server';
 import { generateReport, getMotivationalMessage } from '@/lib/reportGenerator';
+import { extractLessonFacts, reconcileFacts } from '@/lib/db';
+import { supabaseServer } from '@/lib/supabase-server';
 
 export async function POST(request: NextRequest) {
   try {
-    const { sessionId } = await request.json();
+    const { sessionId, lessonId, userId } = await request.json();
 
-    if (!sessionId) {
+    // Use lessonId for observations (new flow) or fall back to sessionId (legacy)
+    const observationSessionId = lessonId || sessionId;
+
+    if (!observationSessionId) {
       return new Response(
-        JSON.stringify({ error: 'Session ID required' }),
+        JSON.stringify({ error: 'Session ID or Lesson ID required' }),
         { status: 400, headers: { 'Content-Type': 'application/json' } }
       );
     }
 
-    const report = await generateReport(sessionId);
+    // Generate the report from observations
+    const report = await generateReport(observationSessionId);
 
     if (!report) {
       return new Response(
@@ -22,12 +28,45 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Extract and save learner_facts from this lesson's observations
+    let learnerFacts: any[] = [];
+    let analysis = null;
+
+    // Use lessonId if available, otherwise fall back to sessionId
+    const factSessionId = lessonId || sessionId;
+    if (factSessionId && userId) {
+      console.log('Extracting facts for session:', factSessionId, 'user:', userId);
+      analysis = await extractLessonFacts(factSessionId, userId);
+
+      const effectiveUserId = analysis?.userId || userId;
+      if (effectiveUserId) {
+        // Reconcile facts (deactivate old struggles that have improved)
+        await reconcileFacts(effectiveUserId);
+
+        // Fetch all active learner_facts for this user
+        const { data: facts } = await supabaseServer
+          .from('learner_facts')
+          .select('*')
+          .eq('user_id', effectiveUserId)
+          .eq('is_active', true)
+          .order('last_confirmed', { ascending: false });
+
+        learnerFacts = facts || [];
+      }
+    }
+
     const motivationalMessage = getMotivationalMessage(report.sessionSummary.overallScore);
 
     return new Response(
       JSON.stringify({
         ...report,
         motivationalMessage,
+        learnerFacts,
+        analysisResults: analysis ? {
+          performanceSummary: analysis.performanceSummary,
+          newFactsCount: analysis.extractedFacts.filter((f: any) => f.isNew).length,
+          updatedFactsCount: analysis.extractedFacts.filter((f: any) => !f.isNew).length,
+        } : null,
       }),
       { status: 200, headers: { 'Content-Type': 'application/json' } }
     );

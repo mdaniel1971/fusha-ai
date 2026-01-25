@@ -14,7 +14,9 @@ import {
   loadLearnerContext,
   buildContextPrompt,
   canSendMessage,
-  incrementUsage,
+  incrementLessonUsage,
+  updateLessonState,
+  getQuotaInfo,
 } from "@/lib/db";
 
 // Lazy initialization of Anthropic client
@@ -191,34 +193,31 @@ export async function POST(request: NextRequest) {
       model = "claude-haiku-4-5-20251001",
     } = await request.json();
 
-    // Check quota if userId is provided
+    // Check quota if userId is provided - return 403 if limit hit
     if (userId) {
       const quotaCheck = await canSendMessage(userId);
       if (!quotaCheck.canSend) {
-        // Return quota exceeded as a stream event
-        const encoder = new TextEncoder();
-        const errorStream = new ReadableStream({
-          start(controller) {
-            const errorData = JSON.stringify({
-              type: "quota_exceeded",
-              reason: quotaCheck.reason,
-              quotaInfo: {
-                messagesRemaining: quotaCheck.messagesRemaining,
-                resetDate: quotaCheck.resetDate.toISOString(),
-              },
-            });
-            controller.enqueue(encoder.encode(`data: ${errorData}\n\n`));
-            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-            controller.close();
-          },
-        });
-        return new Response(errorStream, {
-          headers: {
-            "Content-Type": "text/event-stream",
-            "Cache-Control": "no-cache",
-            Connection: "keep-alive",
-          },
-        });
+        // Return 403 with quota information
+        return new Response(
+          JSON.stringify({
+            error: "quota_exceeded",
+            reason: quotaCheck.reason,
+            quotaInfo: {
+              messagesRemaining: quotaCheck.messagesRemaining,
+              tokensRemaining: quotaCheck.tokensRemaining,
+              resetDate: quotaCheck.resetDate.toISOString(),
+            },
+          }),
+          {
+            status: 403,
+            headers: { "Content-Type": "application/json" },
+          }
+        );
+      }
+
+      // Increment usage at start (before processing) if lessonId provided
+      if (lessonId) {
+        await incrementLessonUsage(userId, lessonId, 0);
       }
     }
 
@@ -316,18 +315,31 @@ Use this information to personalize the diagnostic:
             }
           }
 
-          // Increment usage if userId and lessonId are provided
+          // Update token usage after stream completes (don't increment messages again)
           let quotaInfo = null;
           if (userId && lessonId) {
             const totalTokens = usage.input_tokens + usage.output_tokens;
-            const usageResult = await incrementUsage(
+            // Update tokens used only - messages were already incremented at start
+            const usageResult = await incrementLessonUsage(
               userId,
               lessonId,
               totalTokens,
+              false, // Don't increment messages, only update tokens
             );
             quotaInfo = {
               messagesRemaining: usageResult.messagesRemaining,
+              tokensRemaining: usageResult.tokensRemaining,
             };
+
+            // Extract topic from response and update lesson state (every message)
+            const topicMatch = cleanedResponse.match(
+              /(?:What (?:does|is)|In .+?, what|How do you say)/i
+            );
+            if (topicMatch) {
+              // Extract a summary of what was asked
+              const topicPreview = cleanedResponse.slice(0, 100).replace(/\n/g, " ");
+              await updateLessonState(lessonId, topicPreview);
+            }
           }
 
           const usageData = JSON.stringify({
@@ -344,17 +356,21 @@ Use this information to personalize the diagnostic:
           });
           controller.enqueue(encoder.encode(`data: ${usageData}\n\n`));
 
-          if (sessionId && fullResponse) {
+          // Use lessonId for observations (so extractLessonFacts can find them)
+          // Fall back to sessionId for backwards compatibility
+          const observationSessionId = lessonId || sessionId;
+
+          if (observationSessionId && fullResponse) {
             const gramMatch = fullResponse.match(/\[GRAM:[^\]]+\]/g);
             if (gramMatch) {
               const { observations: grammarObs } = parseGrammarObservations(
                 fullResponse,
-                sessionId,
+                observationSessionId,
                 userId,
               );
               if (grammarObs.length > 0) {
                 logGrammarObservations(grammarObs).catch((err: Error) =>
-                  console.error(err),
+                  console.error('Failed to log grammar observations:', err),
                 );
               }
             }
@@ -363,12 +379,12 @@ Use this information to personalize the diagnostic:
             if (transMatch) {
               const { observations: transObs } = parseTranslationObservations(
                 fullResponse,
-                sessionId,
+                observationSessionId,
                 userId,
               );
               if (transObs.length > 0) {
                 logTranslationObservations(transObs).catch((err: Error) =>
-                  console.error(err),
+                  console.error('Failed to log translation observations:', err),
                 );
               }
             }

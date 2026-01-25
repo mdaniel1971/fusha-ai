@@ -381,6 +381,186 @@ async function resetAllExpiredQuotasFallback(): Promise<number> {
 // Update Subscription Tier
 // ============================================================
 
+// ============================================================
+// Increment Lesson Usage (RPC-based)
+// ============================================================
+
+/**
+ * Increment lesson usage.
+ * @param userId - User ID
+ * @param lessonId - Lesson ID
+ * @param tokensUsed - Tokens to add (default 0)
+ * @param incrementMessages - Whether to increment message count (default true)
+ */
+export async function incrementLessonUsage(
+  userId: string,
+  lessonId: string,
+  tokensUsed: number = 0,
+  incrementMessages: boolean = true
+): Promise<UsageIncrementResult> {
+  // Try using RPC first (only if incrementing messages, since RPC always increments)
+  if (incrementMessages) {
+    const { data, error } = await supabaseServer.rpc('increment_lesson_usage', {
+      p_user_id: userId,
+      p_lesson_id: lessonId,
+      p_tokens: tokensUsed,
+    });
+
+    if (!error && data) {
+      return {
+        messagesRemaining: data.messages_remaining,
+        tokensRemaining: data.tokens_remaining,
+      };
+    }
+  }
+
+  // Fallback to direct increment
+  return await incrementUsageFallbackDirect(userId, lessonId, tokensUsed, incrementMessages);
+}
+
+/**
+ * Direct increment fallback (non-RPC)
+ */
+async function incrementUsageFallbackDirect(
+  userId: string,
+  lessonId: string,
+  tokensUsed: number,
+  incrementMessages: boolean = true
+): Promise<UsageIncrementResult> {
+  // Get current profile
+  const { data: profile } = await supabaseServer
+    .from('profiles')
+    .select('weekly_messages_used, weekly_tokens_used, weekly_message_quota, weekly_token_quota')
+    .eq('id', userId)
+    .single();
+
+  if (profile) {
+    // Build update object - only increment messages if requested
+    const profileUpdate: Record<string, number> = {
+      weekly_tokens_used: profile.weekly_tokens_used + tokensUsed,
+    };
+    if (incrementMessages) {
+      profileUpdate.weekly_messages_used = profile.weekly_messages_used + 1;
+    }
+
+    await supabaseServer
+      .from('profiles')
+      .update(profileUpdate)
+      .eq('id', userId);
+
+    // Update lesson counters
+    const { data: lesson } = await supabaseServer
+      .from('lessons')
+      .select('messages_count, tokens_used')
+      .eq('id', lessonId)
+      .single();
+
+    if (lesson) {
+      const lessonUpdate: Record<string, number> = {
+        tokens_used: (lesson.tokens_used || 0) + tokensUsed,
+      };
+      if (incrementMessages) {
+        lessonUpdate.messages_count = (lesson.messages_count || 0) + 1;
+      }
+
+      await supabaseServer
+        .from('lessons')
+        .update(lessonUpdate)
+        .eq('id', lessonId);
+    }
+
+    const messagesUsedAfter = incrementMessages
+      ? profile.weekly_messages_used + 1
+      : profile.weekly_messages_used;
+
+    return {
+      messagesRemaining: profile.weekly_message_quota - messagesUsedAfter,
+      tokensRemaining: profile.weekly_token_quota - profile.weekly_tokens_used - tokensUsed,
+    };
+  }
+
+  // Fallback if no profile found
+  return { messagesRemaining: 0, tokensRemaining: 0 };
+}
+
+// ============================================================
+// Update Lesson State (Topic & Notes)
+// ============================================================
+
+/**
+ * Update lesson state with current topic and session notes.
+ * Called periodically (every few messages) or at session end.
+ */
+export async function updateLessonState(
+  lessonId: string,
+  lastTopicDiscussed: string,
+  sessionNotes?: string
+): Promise<void> {
+  const updates: Record<string, unknown> = {
+    last_topic_discussed: lastTopicDiscussed,
+    updated_at: new Date().toISOString(),
+  };
+
+  if (sessionNotes) {
+    updates.session_notes = sessionNotes;
+  }
+
+  const { error } = await supabaseServer
+    .from('lessons')
+    .update(updates)
+    .eq('id', lessonId);
+
+  if (error) {
+    console.error('Error updating lesson state:', error);
+  }
+}
+
+/**
+ * Get active lesson for a user (most recent unfinished lesson).
+ */
+export async function getActiveLesson(userId: string): Promise<{
+  id: string;
+  surah_id: number;
+  messages_count: number;
+  tokens_used: number;
+  last_topic_discussed: string | null;
+  session_notes: string | null;
+  started_at: string;
+} | null> {
+  const { data, error } = await supabaseServer
+    .from('lessons')
+    .select('id, surah_id, messages_count, tokens_used, last_topic_discussed, session_notes, started_at')
+    .eq('user_id', userId)
+    .is('ended_at', null)
+    .order('started_at', { ascending: false })
+    .limit(1)
+    .single();
+
+  if (error || !data) {
+    return null;
+  }
+
+  return data;
+}
+
+/**
+ * End a lesson by setting the ended_at timestamp.
+ */
+export async function endLesson(lessonId: string): Promise<void> {
+  const { error } = await supabaseServer
+    .from('lessons')
+    .update({ ended_at: new Date().toISOString() })
+    .eq('id', lessonId);
+
+  if (error) {
+    console.error('Error ending lesson:', error);
+  }
+}
+
+// ============================================================
+// Update Subscription Tier
+// ============================================================
+
 /**
  * Update a user's subscription tier.
  * The database trigger will automatically update their quotas.

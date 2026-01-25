@@ -1,8 +1,10 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import LearningReport from '@/components/LearningReport';
 import LogoutButton from '@/components/LogoutButton';
+import { createClient } from '@/lib/supabase/client';
+import type { User } from '@supabase/supabase-js';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -18,6 +20,60 @@ interface TokenUsage {
   outputCost: string;
   totalCost: string;
   model: string;
+}
+
+interface QuotaInfo {
+  tier: string;
+  messagesUsed: number;
+  messageQuota: number;
+  messagesRemaining: number;
+  tokensUsed: number;
+  tokenQuota: number;
+  tokensRemaining: number;
+  resetDate: string;
+}
+
+interface ActiveLesson {
+  id: string;
+  surah_id: number;
+  messages_count: number;
+  tokens_used: number;
+  last_topic_discussed: string | null;
+  session_notes: string | null;
+  started_at: string;
+}
+
+interface LearnerProfile {
+  userId: string;
+  facts: {
+    struggles: Array<{
+      id: string;
+      text: string;
+      category: string | null;
+      examples: string[] | null;
+      observationCount: number;
+    }>;
+    strengths: Array<{
+      id: string;
+      text: string;
+      category: string | null;
+      observationCount: number;
+    }>;
+  };
+  patterns: {
+    grammarAccuracy: number;
+    translationAccuracy: number;
+    weakestAreas: Array<{ feature: string; accuracy: number }>;
+    strongestAreas: Array<{ feature: string; accuracy: number }>;
+  };
+  lastLesson: {
+    surahName: string | null;
+    topicDiscussed: string | null;
+    performanceSummary: string | null;
+    endedAt: string | null;
+  } | null;
+  recommendedDifficulty: number;
+  hasHistory: boolean;
 }
 
 // Format text to render Arabic in larger Amiri font, English in Arial
@@ -99,6 +155,15 @@ export default function DiagnosticChatClient() {
   const [modelChosen, setModelChosen] = useState(false);
   const [totalSessionCost, setTotalSessionCost] = useState(0);
 
+  // Auth and lesson state
+  const [user, setUser] = useState<User | null>(null);
+  const [lessonId, setLessonId] = useState<string | null>(null);
+  const [quotaInfo, setQuotaInfo] = useState<QuotaInfo | null>(null);
+  const [activeLesson, setActiveLesson] = useState<ActiveLesson | null>(null);
+  const [quotaExceeded, setQuotaExceeded] = useState(false);
+  const [learnerProfile, setLearnerProfile] = useState<LearnerProfile | null>(null);
+  const [profileLoading, setProfileLoading] = useState(true);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLDivElement>(null);
 
@@ -112,6 +177,64 @@ export default function DiagnosticChatClient() {
     if (storedModel) {
       setSelectedModel(storedModel);
     }
+  }, []);
+
+  // Fetch user and active lesson on mount
+  useEffect(() => {
+    const supabase = createClient();
+
+    const fetchUserAndLesson = async () => {
+      setProfileLoading(true);
+      // Get authenticated user
+      const { data: { user } } = await supabase.auth.getUser();
+      setUser(user);
+
+      if (user) {
+        // Fetch active lesson, quota info, and learner profile in parallel
+        try {
+          const [lessonRes, profileRes] = await Promise.all([
+            fetch('/api/lessons/active'),
+            fetch('/api/learner/profile'),
+          ]);
+
+          if (lessonRes.ok) {
+            const data = await lessonRes.json();
+            setQuotaInfo(data.quotaInfo);
+            if (data.lesson) {
+              setActiveLesson(data.lesson);
+              setLessonId(data.lesson.id);
+            }
+          }
+
+          if (profileRes.ok) {
+            const profileData = await profileRes.json();
+            setLearnerProfile(profileData);
+          }
+        } catch (err) {
+          console.error('Failed to fetch user data:', err);
+        }
+      }
+      setProfileLoading(false);
+    };
+
+    fetchUserAndLesson();
+
+    // Subscribe to auth changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        setUser(session?.user ?? null);
+        if (!session?.user) {
+          setQuotaInfo(null);
+          setActiveLesson(null);
+          setLessonId(null);
+          setLearnerProfile(null);
+        }
+      }
+    );
+
+    return () => {
+      subscription.unsubscribe();
+    };
   }, []);
 
   // Inject CSS for contentEditable styling
@@ -241,10 +364,54 @@ export default function DiagnosticChatClient() {
     setChatStarted(true);
     setIsLoading(true);
     setError(null);
+    setQuotaExceeded(false);
 
     try {
       // Create session record in database first
       await createSessionRecord(newSessionId, surah.id);
+
+      // Create lesson record if user is authenticated
+      let newLessonId: string | null = null;
+      if (user) {
+        try {
+          const res = await fetch('/api/lessons/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              userId: user.id,
+              surahId: surah.id,
+              learningMode: 'diagnostic',
+            }),
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data.success) {
+              newLessonId = data.lessonId;
+              setLessonId(newLessonId);
+              if (data.quotaInfo) {
+                setQuotaInfo((prev) => {
+                  if (!prev) return null;
+                  const messagesRemaining = data.quotaInfo.messagesRemaining;
+                  return {
+                    ...prev,
+                    messagesRemaining,
+                    messagesUsed: prev.messageQuota - messagesRemaining,
+                  };
+                });
+              }
+            } else if (data.error === 'quota_exceeded') {
+              setQuotaExceeded(true);
+              setError(
+                `You've reached your weekly message limit. Resets ${new Date(data.quotaInfo.resetDate).toLocaleDateString()}.`
+              );
+              setIsLoading(false);
+              return;
+            }
+          }
+        } catch (err) {
+          console.error('Failed to create lesson:', err);
+        }
+      }
 
       await streamChat(
         [
@@ -255,7 +422,8 @@ export default function DiagnosticChatClient() {
         ],
         true,
         surah.id,
-        newSessionId
+        newSessionId,
+        newLessonId
       );
     } catch (err) {
       console.error('Failed to start chat:', err);
@@ -268,7 +436,8 @@ export default function DiagnosticChatClient() {
     chatMessages: Message[],
     isSystemMessage = false,
     surahId?: number,
-    overrideSessionId?: string
+    overrideSessionId?: string,
+    overrideLessonId?: string | null
   ) => {
     setStreamingText('');
     setError(null);
@@ -281,9 +450,23 @@ export default function DiagnosticChatClient() {
           messages: chatMessages,
           surahId: surahId || selectedSurah?.id || 1,
           sessionId: overrideSessionId || sessionId,
+          lessonId: overrideLessonId !== undefined ? overrideLessonId : lessonId,
+          userId: user?.id,
           model: selectedModel,
         }),
       });
+
+      // Handle 403 quota exceeded
+      if (response.status === 403) {
+        const errorData = await response.json();
+        if (errorData.error === 'quota_exceeded') {
+          setQuotaExceeded(true);
+          setError(
+            `You've reached your weekly message limit. Resets ${new Date(errorData.quotaInfo.resetDate).toLocaleDateString()}.`
+          );
+          return '';
+        }
+      }
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -321,6 +504,20 @@ export default function DiagnosticChatClient() {
                 setTotalSessionCost(
                   (prev) => prev + parseFloat(parsed.usage.totalCost)
                 );
+              }
+              if (parsed.quotaInfo) {
+                setQuotaInfo((prev) => {
+                  if (!prev) return null;
+                  const messagesRemaining = parsed.quotaInfo.messagesRemaining;
+                  const tokensRemaining = parsed.quotaInfo.tokensRemaining ?? prev.tokensRemaining;
+                  return {
+                    ...prev,
+                    messagesRemaining,
+                    messagesUsed: prev.messageQuota - messagesRemaining,
+                    tokensRemaining,
+                    tokensUsed: prev.tokenQuota - tokensRemaining,
+                  };
+                });
               }
               if (parsed.error) {
                 console.error('Stream error:', parsed.error);
@@ -451,6 +648,147 @@ export default function DiagnosticChatClient() {
               padding: '2rem',
             }}
           >
+            {/* Welcome Back Section - shown when user has learning history */}
+            {learnerProfile?.hasHistory && !modelChosen && (
+              <div
+                style={{
+                  width: '100%',
+                  maxWidth: '500px',
+                  padding: '1.5rem',
+                  background: 'linear-gradient(135deg, #f0f7ff, #f8f0ff)',
+                  borderRadius: '16px',
+                  marginBottom: '1rem',
+                }}
+              >
+                <h2
+                  style={{
+                    fontFamily: 'Arial, sans-serif',
+                    fontSize: '1.25rem',
+                    color: '#333',
+                    marginBottom: '1rem',
+                  }}
+                >
+                  Welcome back!
+                </h2>
+
+                {/* Last Session Info */}
+                {learnerProfile.lastLesson && (
+                  <div
+                    style={{
+                      marginBottom: '1rem',
+                      padding: '0.75rem',
+                      background: '#fff',
+                      borderRadius: '8px',
+                      fontSize: '0.9rem',
+                    }}
+                  >
+                    <p style={{ color: '#666', margin: 0 }}>
+                      Last studied: <strong>{learnerProfile.lastLesson.surahName || 'Unknown'}</strong>
+                    </p>
+                    {learnerProfile.lastLesson.performanceSummary && (
+                      <p style={{ color: '#666', margin: '0.5rem 0 0' }}>
+                        {learnerProfile.lastLesson.performanceSummary}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {/* Accuracy Stats */}
+                {(learnerProfile.patterns.grammarAccuracy > 0 || learnerProfile.patterns.translationAccuracy > 0) && (
+                  <div
+                    style={{
+                      display: 'flex',
+                      gap: '1rem',
+                      marginBottom: '1rem',
+                    }}
+                  >
+                    {learnerProfile.patterns.grammarAccuracy > 0 && (
+                      <div
+                        style={{
+                          flex: 1,
+                          padding: '0.75rem',
+                          background: '#fff',
+                          borderRadius: '8px',
+                          textAlign: 'center',
+                        }}
+                      >
+                        <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#3b82f6' }}>
+                          {learnerProfile.patterns.grammarAccuracy}%
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: '#666' }}>Grammar</div>
+                      </div>
+                    )}
+                    {learnerProfile.patterns.translationAccuracy > 0 && (
+                      <div
+                        style={{
+                          flex: 1,
+                          padding: '0.75rem',
+                          background: '#fff',
+                          borderRadius: '8px',
+                          textAlign: 'center',
+                        }}
+                      >
+                        <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#8b5cf6' }}>
+                          {learnerProfile.patterns.translationAccuracy}%
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: '#666' }}>Vocabulary</div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Areas to Focus */}
+                {learnerProfile.facts.struggles.length > 0 && (
+                  <div style={{ marginBottom: '0.75rem' }}>
+                    <p style={{ fontSize: '0.8rem', color: '#666', marginBottom: '0.5rem' }}>
+                      Areas to focus on:
+                    </p>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                      {learnerProfile.facts.struggles.slice(0, 3).map((struggle, i) => (
+                        <span
+                          key={i}
+                          style={{
+                            fontSize: '0.8rem',
+                            background: '#fee2e2',
+                            color: '#dc2626',
+                            padding: '0.25rem 0.75rem',
+                            borderRadius: '999px',
+                          }}
+                        >
+                          {struggle.text.length > 30 ? struggle.text.slice(0, 30) + '...' : struggle.text}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Strengths */}
+                {learnerProfile.facts.strengths.length > 0 && (
+                  <div>
+                    <p style={{ fontSize: '0.8rem', color: '#666', marginBottom: '0.5rem' }}>
+                      Your strengths:
+                    </p>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                      {learnerProfile.facts.strengths.slice(0, 3).map((strength, i) => (
+                        <span
+                          key={i}
+                          style={{
+                            fontSize: '0.8rem',
+                            background: '#dcfce7',
+                            color: '#166534',
+                            padding: '0.25rem 0.75rem',
+                            borderRadius: '999px',
+                          }}
+                        >
+                          {strength.text.length > 30 ? strength.text.slice(0, 30) + '...' : strength.text}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Model Selection */}
             {!modelChosen ? (
               <div
@@ -468,7 +806,7 @@ export default function DiagnosticChatClient() {
                     color: '#333',
                   }}
                 >
-                  Choose a model
+                  {learnerProfile?.hasHistory ? 'Ready to continue?' : 'Choose a model'}
                 </h2>
                 <p
                   style={{
@@ -666,59 +1004,112 @@ export default function DiagnosticChatClient() {
         ) : (
           /* Diagnostic Chat */
           <>
-            {/* Header with back button */}
+            {/* Header with back button and end lesson */}
             <div
               style={{
                 display: 'flex',
                 alignItems: 'center',
-                gap: '0.75rem',
+                justifyContent: 'space-between',
                 marginBottom: '0.5rem',
                 padding: '0.5rem 0',
               }}
             >
-              <button
-                onClick={() => {
-                  setChatStarted(false);
-                  setMessages([]);
-                  setTotalSessionCost(0);
-                  setSessionId(null);
-                  setSelectedSurah(null);
-                }}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  color: '#3b82f6',
-                  cursor: 'pointer',
-                  fontSize: '1.5rem',
-                  padding: '0.25rem',
-                  lineHeight: 1,
-                }}
-              >
-                &#8592;
-              </button>
-              <div>
-                <span
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <button
+                  onClick={async () => {
+                    // End the lesson if one exists
+                    if (lessonId) {
+                      try {
+                        await fetch('/api/lessons/active', {
+                          method: 'DELETE',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ lessonId }),
+                        });
+                      } catch (err) {
+                        console.error('Failed to end lesson:', err);
+                      }
+                    }
+                    setChatStarted(false);
+                    setMessages([]);
+                    setTotalSessionCost(0);
+                    setSessionId(null);
+                    setSelectedSurah(null);
+                    setLessonId(null);
+                    setActiveLesson(null);
+                    setQuotaExceeded(false);
+                  }}
                   style={{
-                    fontFamily: "'Amiri', 'Traditional Arabic', serif",
-                    fontSize: '1.2rem',
-                    marginRight: '0.5rem',
+                    background: 'none',
+                    border: 'none',
+                    color: '#3b82f6',
+                    cursor: 'pointer',
+                    fontSize: '1.5rem',
+                    padding: '0.25rem',
+                    lineHeight: 1,
                   }}
                 >
-                  {
-                    availableSurahs.find((s) => s.id === selectedSurah?.id)
-                      ?.arabicName
-                  }
-                </span>
-                <span
-                  style={{
-                    fontFamily: 'Arial, sans-serif',
-                    fontSize: '0.9rem',
-                    color: '#666',
-                  }}
-                >
-                  Diagnostic
-                </span>
+                  &#8592;
+                </button>
+                <div>
+                  <span
+                    style={{
+                      fontFamily: "'Amiri', 'Traditional Arabic', serif",
+                      fontSize: '1.2rem',
+                      marginRight: '0.5rem',
+                    }}
+                  >
+                    {
+                      availableSurahs.find((s) => s.id === selectedSurah?.id)
+                        ?.arabicName
+                    }
+                  </span>
+                  <span
+                    style={{
+                      fontFamily: 'Arial, sans-serif',
+                      fontSize: '0.9rem',
+                      color: '#666',
+                    }}
+                  >
+                    Diagnostic
+                  </span>
+                </div>
               </div>
+              {/* End Lesson Button */}
+              {lessonId && (
+                <button
+                  onClick={async () => {
+                    try {
+                      await fetch('/api/lessons/active', {
+                        method: 'DELETE',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ lessonId }),
+                      });
+                      setChatStarted(false);
+                      setMessages([]);
+                      setTotalSessionCost(0);
+                      setSessionId(null);
+                      setSelectedSurah(null);
+                      setLessonId(null);
+                      setActiveLesson(null);
+                      setQuotaExceeded(false);
+                    } catch (err) {
+                      console.error('Failed to end lesson:', err);
+                    }
+                  }}
+                  style={{
+                    padding: '0.5rem 1rem',
+                    fontSize: '0.875rem',
+                    fontFamily: 'Arial, sans-serif',
+                    backgroundColor: '#fee2e2',
+                    color: '#dc2626',
+                    border: '1px solid #fecaca',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  End Lesson
+                </button>
+              )}
             </div>
 
             {/* Chat area with tip sidebar */}
@@ -853,33 +1244,154 @@ export default function DiagnosticChatClient() {
                 <div ref={messagesEndRef} />
               </div>
 
-              {/* Tip sidebar */}
+              {/* Sidebar with progress and tip */}
               <div
                 style={{
-                  width: '200px',
+                  width: '220px',
                   flexShrink: 0,
-                  backgroundColor: '#f0f7ff',
-                  border: '1px solid #bfdbfe',
-                  borderRadius: '8px',
-                  padding: '1rem',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '0.75rem',
                   alignSelf: 'flex-start',
                   position: 'sticky',
                   top: 0,
                 }}
               >
-                <p
+                {/* Progress Card */}
+                {quotaInfo && (
+                  <div
+                    style={{
+                      backgroundColor: quotaExceeded ? '#fef2f2' : '#f0fdf4',
+                      border: `1px solid ${quotaExceeded ? '#fecaca' : '#bbf7d0'}`,
+                      borderRadius: '8px',
+                      padding: '1rem',
+                    }}
+                  >
+                    <p
+                      style={{
+                        fontFamily: 'Arial, sans-serif',
+                        fontSize: '0.75rem',
+                        color: '#666',
+                        margin: '0 0 0.5rem 0',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.05em',
+                      }}
+                    >
+                      Weekly Progress
+                    </p>
+                    <p
+                      style={{
+                        fontFamily: 'Arial, sans-serif',
+                        fontSize: '1.25rem',
+                        fontWeight: 'bold',
+                        color: quotaExceeded ? '#dc2626' : '#16a34a',
+                        margin: '0 0 0.25rem 0',
+                      }}
+                    >
+                      {quotaInfo.messagesUsed}/{quotaInfo.messageQuota}
+                    </p>
+                    <p
+                      style={{
+                        fontFamily: 'Arial, sans-serif',
+                        fontSize: '0.75rem',
+                        color: '#666',
+                        margin: 0,
+                      }}
+                    >
+                      messages used
+                    </p>
+                    {/* Progress bar */}
+                    <div
+                      style={{
+                        marginTop: '0.5rem',
+                        height: '4px',
+                        backgroundColor: '#e5e7eb',
+                        borderRadius: '2px',
+                        overflow: 'hidden',
+                      }}
+                    >
+                      <div
+                        style={{
+                          height: '100%',
+                          width: `${Math.min(100, (quotaInfo.messagesUsed / quotaInfo.messageQuota) * 100)}%`,
+                          backgroundColor: quotaExceeded ? '#dc2626' : '#16a34a',
+                          transition: 'width 0.3s ease',
+                        }}
+                      />
+                    </div>
+                    <p
+                      style={{
+                        fontFamily: 'Arial, sans-serif',
+                        fontSize: '0.7rem',
+                        color: '#999',
+                        margin: '0.5rem 0 0 0',
+                      }}
+                    >
+                      Tier: {quotaInfo.tier.charAt(0).toUpperCase() + quotaInfo.tier.slice(1)}
+                    </p>
+                  </div>
+                )}
+
+                {/* Current Topic Card */}
+                {activeLesson?.last_topic_discussed && (
+                  <div
+                    style={{
+                      backgroundColor: '#fefce8',
+                      border: '1px solid #fef08a',
+                      borderRadius: '8px',
+                      padding: '1rem',
+                    }}
+                  >
+                    <p
+                      style={{
+                        fontFamily: 'Arial, sans-serif',
+                        fontSize: '0.75rem',
+                        color: '#666',
+                        margin: '0 0 0.25rem 0',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.05em',
+                      }}
+                    >
+                      Current Topic
+                    </p>
+                    <p
+                      style={{
+                        fontFamily: 'Arial, sans-serif',
+                        fontSize: '0.8rem',
+                        color: '#854d0e',
+                        margin: 0,
+                        lineHeight: 1.4,
+                      }}
+                    >
+                      {activeLesson.last_topic_discussed.slice(0, 80)}
+                      {activeLesson.last_topic_discussed.length > 80 ? '...' : ''}
+                    </p>
+                  </div>
+                )}
+
+                {/* Tip Card */}
+                <div
                   style={{
-                    fontFamily: 'Arial, sans-serif',
-                    color: '#1e40af',
-                    fontSize: '0.8rem',
-                    margin: 0,
-                    lineHeight: 1.5,
+                    backgroundColor: '#f0f7ff',
+                    border: '1px solid #bfdbfe',
+                    borderRadius: '8px',
+                    padding: '1rem',
                   }}
                 >
-                  <strong>Tip:</strong> Arabic answers can be in Arabic script
-                  or transliteration. Grammar terms can be in English or Arabic
-                  (e.g., nominative/marfu&apos;, genitive/majrur).
-                </p>
+                  <p
+                    style={{
+                      fontFamily: 'Arial, sans-serif',
+                      color: '#1e40af',
+                      fontSize: '0.8rem',
+                      margin: 0,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    <strong>Tip:</strong> Arabic answers can be in Arabic script
+                    or transliteration. Grammar terms can be in English or Arabic
+                    (e.g., nominative/marfu&apos;, genitive/majrur).
+                  </p>
+                </div>
               </div>
             </div>
 
@@ -999,6 +1511,8 @@ export default function DiagnosticChatClient() {
         {showReport && sessionId && (
           <LearningReport
             sessionId={sessionId}
+            lessonId={lessonId || undefined}
+            userId={user?.id}
             onClose={() => setShowReport(false)}
           />
         )}
