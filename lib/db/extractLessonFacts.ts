@@ -1,4 +1,5 @@
-import { supabase } from '../supabase';
+// Use service role client to bypass RLS for server-side operations
+import { supabaseServer as supabase } from '../supabase-server';
 import type {
   LearnerFact,
   LearnerFactInsert,
@@ -19,6 +20,7 @@ export async function extractLessonFacts(
   lessonId: string,
   providedUserId?: string
 ): Promise<LessonAnalysis | null> {
+  console.log('[extractLessonFacts] Starting extraction for lessonId:', lessonId, 'providedUserId:', providedUserId);
   let userId = providedUserId;
 
   // If no userId provided, try to get it from the lesson
@@ -66,14 +68,18 @@ export async function extractLessonFacts(
     return null;
   }
 
+  console.log('[extractLessonFacts] Using userId:', userId);
+
   // Fetch all observations from this lesson
   const [grammarObs, translationObs] = await Promise.all([
     fetchLessonGrammarObservations(lessonId),
     fetchLessonTranslationObservations(lessonId),
   ]);
 
+  console.log('[extractLessonFacts] Found observations - grammar:', grammarObs.length, 'translation:', translationObs.length);
+
   if (grammarObs.length === 0 && translationObs.length === 0) {
-    console.log('No observations found for lesson:', lessonId);
+    console.log('[extractLessonFacts] No observations found for lesson:', lessonId);
     return {
       lessonId,
       userId,
@@ -89,14 +95,19 @@ export async function extractLessonFacts(
 
   // Analyze grammar patterns
   const grammarFacts = analyzeGrammarObservations(grammarObs);
+  console.log('[extractLessonFacts] Grammar facts generated:', grammarFacts.length);
   extractedFacts.push(...grammarFacts);
 
   // Analyze translation patterns
   const translationFacts = analyzeTranslationObservations(translationObs);
+  console.log('[extractLessonFacts] Translation facts generated:', translationFacts.length);
   extractedFacts.push(...translationFacts);
+
+  console.log('[extractLessonFacts] Total facts to save:', extractedFacts.length);
 
   // Save facts to database (create new or update existing)
   const savedFacts = await saveFacts(userId, lessonId, extractedFacts);
+  console.log('[extractLessonFacts] Facts saved:', savedFacts.length);
 
   // Generate performance summary
   const performanceSummary = generatePerformanceSummary(grammarObs, translationObs);
@@ -158,54 +169,60 @@ async function fetchLessonTranslationObservations(lessonId: string): Promise<Tra
 
 /**
  * Analyze grammar observations and extract facts
+ * TEMP: Very low thresholds for testing - creates facts for ANY observation
  */
 function analyzeGrammarObservations(observations: GrammarObservation[]): ExtractedFact[] {
   const facts: ExtractedFact[] = [];
-  if (observations.length === 0) return facts;
+  console.log('[analyzeGrammarObservations] Processing', observations.length, 'observations');
+
+  if (observations.length === 0) {
+    console.log('[analyzeGrammarObservations] No observations to process');
+    return facts;
+  }
 
   // Group by feature
   const byFeature = new Map<string, { correct: number; incorrect: number; examples: string[] }>();
 
   for (const obs of observations) {
-    if (!byFeature.has(obs.grammar_feature)) {
-      byFeature.set(obs.grammar_feature, { correct: 0, incorrect: 0, examples: [] });
+    const feature = obs.grammar_feature || 'general';
+    if (!byFeature.has(feature)) {
+      byFeature.set(feature, { correct: 0, incorrect: 0, examples: [] });
     }
-    const data = byFeature.get(obs.grammar_feature)!;
+    const data = byFeature.get(feature)!;
 
     if (obs.is_correct) {
       data.correct++;
     } else {
       data.incorrect++;
-      // Store example mistakes
       if (data.examples.length < 3) {
         data.examples.push(`${obs.student_answer} → ${obs.correct_answer}`);
       }
     }
   }
 
-  // Extract facts based on patterns
-  console.log('Analyzing grammar observations by feature:', Object.fromEntries(byFeature));
+  console.log('[analyzeGrammarObservations] Grouped by feature:', JSON.stringify(Object.fromEntries(byFeature)));
 
   for (const [feature, data] of byFeature) {
     const total = data.correct + data.incorrect;
-    const accuracy = (data.correct / total) * 100;
+    const accuracy = total > 0 ? (data.correct / total) * 100 : 0;
     const featureName = formatFeatureName(feature);
 
-    console.log(`Feature ${feature}: ${data.correct}/${total} correct (${accuracy.toFixed(0)}%)`);
+    console.log(`[analyzeGrammarObservations] ${feature}: ${data.correct}/${total} (${accuracy.toFixed(0)}%)`);
 
-    // Struggle: accuracy < 60% with at least 1 observation
-    if (accuracy < 60 && total >= 1 && data.incorrect > 0) {
+    // TEMP: Create facts for ANY observation to test the flow
+    if (data.incorrect > 0) {
+      console.log('[analyzeGrammarObservations] Creating struggle for:', featureName);
       facts.push({
         factType: 'struggle',
         factText: `Struggles with ${featureName}`,
         category: 'grammar',
         arabicExamples: data.examples,
-        isNew: true,  // Will be determined when saving
+        isNew: true,
       });
     }
 
-    // Strength: accuracy >= 75% with at least 2 observations
-    if (accuracy >= 75 && total >= 2) {
+    if (data.correct > 0) {
+      console.log('[analyzeGrammarObservations] Creating strength for:', featureName);
       facts.push({
         factType: 'strength',
         factText: `Strong understanding of ${featureName}`,
@@ -216,48 +233,33 @@ function analyzeGrammarObservations(observations: GrammarObservation[]): Extract
     }
   }
 
-  // Look for specific confusion patterns
-  const confusions = new Map<string, number>();
-  for (const obs of observations) {
-    if (!obs.is_correct) {
-      const key = `${obs.student_answer}|${obs.correct_answer}`;
-      confusions.set(key, (confusions.get(key) || 0) + 1);
-    }
-  }
-
-  // Add recurring confusions as struggles
-  for (const [key, count] of confusions) {
-    if (count >= 2) {
-      const [student, correct] = key.split('|');
-      facts.push({
-        factType: 'struggle',
-        factText: `Confuses "${student}" with "${correct}"`,
-        category: 'grammar',
-        arabicExamples: [],
-        isNew: true,
-      });
-    }
-  }
-
+  console.log('[analyzeGrammarObservations] Generated', facts.length, 'facts');
   return facts;
 }
 
 /**
  * Analyze translation observations and extract facts
+ * TEMP: Very low thresholds for testing - creates facts for ANY observation
  */
 function analyzeTranslationObservations(observations: TranslationObservation[]): ExtractedFact[] {
   const facts: ExtractedFact[] = [];
-  if (observations.length === 0) return facts;
+  console.log('[analyzeTranslationObservations] Processing', observations.length, 'observations');
+
+  if (observations.length === 0) {
+    console.log('[analyzeTranslationObservations] No observations to process');
+    return facts;
+  }
 
   const correct = observations.filter(o => o.is_correct).length;
   const incorrect = observations.filter(o => !o.is_correct).length;
   const total = observations.length;
-  const accuracy = (correct / total) * 100;
+  const accuracy = total > 0 ? (correct / total) * 100 : 0;
 
-  console.log(`Translation observations: ${correct}/${total} correct (${accuracy.toFixed(0)}%)`);
+  console.log(`[analyzeTranslationObservations] ${correct}/${total} correct (${accuracy.toFixed(0)}%)`);
 
-  // Overall vocabulary assessment - lowered thresholds for testing
-  if (accuracy < 60 && total >= 1 && incorrect > 0) {
+  // TEMP: Create facts for ANY observation to test the flow
+  if (incorrect > 0) {
+    console.log('[analyzeTranslationObservations] Creating vocabulary struggle');
     facts.push({
       factType: 'struggle',
       factText: 'Needs more vocabulary practice',
@@ -265,7 +267,10 @@ function analyzeTranslationObservations(observations: TranslationObservation[]):
       arabicExamples: [],
       isNew: true,
     });
-  } else if (accuracy >= 75 && total >= 2) {
+  }
+
+  if (correct > 0) {
+    console.log('[analyzeTranslationObservations] Creating vocabulary strength');
     facts.push({
       factType: 'strength',
       factText: 'Good vocabulary retention',
@@ -287,22 +292,23 @@ function analyzeTranslationObservations(observations: TranslationObservation[]):
     }
   }
 
-  // Add specific word struggles - lowered from 2 to 1 for testing
+  // Add specific word struggles for ANY missed word
   const frequentlyMissed = Array.from(missedWords.values())
-    .filter(w => w.count >= 1)
     .sort((a, b) => b.count - a.count)
     .slice(0, 3);
 
   if (frequentlyMissed.length > 0) {
+    console.log('[analyzeTranslationObservations] Creating missed words struggle:', frequentlyMissed);
     facts.push({
       factType: 'struggle',
-      factText: `Repeatedly misses these words: ${frequentlyMissed.map(w => w.arabic).join(', ')}`,
+      factText: `Missed words: ${frequentlyMissed.map(w => w.arabic).join(', ')}`,
       category: 'vocabulary',
       arabicExamples: frequentlyMissed.map(w => w.arabic),
       isNew: true,
     });
   }
 
+  console.log('[analyzeTranslationObservations] Generated', facts.length, 'facts');
   return facts;
 }
 
@@ -314,11 +320,14 @@ async function saveFacts(
   lessonId: string,
   extractedFacts: ExtractedFact[]
 ): Promise<ExtractedFact[]> {
+  console.log('[saveFacts] Saving', extractedFacts.length, 'facts for user:', userId, 'lesson:', lessonId);
   const savedFacts: ExtractedFact[] = [];
 
   for (const fact of extractedFacts) {
+    console.log('[saveFacts] Processing fact:', fact.factType, '-', fact.factText);
+
     // Check if a similar fact already exists
-    const { data: existing } = await supabase
+    const { data: existing, error: findError } = await supabase
       .from('learner_facts')
       .select('*')
       .eq('user_id', userId)
@@ -328,9 +337,14 @@ async function saveFacts(
       .eq('is_active', true)
       .limit(1);
 
+    if (findError) {
+      console.error('[saveFacts] Error finding existing fact:', findError);
+    }
+
     if (existing && existing.length > 0) {
       // Update existing fact
       const existingFact = existing[0] as LearnerFact;
+      console.log('[saveFacts] Found existing fact, updating:', existingFact.id);
 
       // Merge Arabic examples
       const mergedExamples = [
@@ -352,14 +366,20 @@ async function saveFacts(
         updateData.success_count = existingFact.success_count + 1;
       }
 
-      await supabase
+      const { error: updateError } = await supabase
         .from('learner_facts')
         .update(updateData)
         .eq('id', existingFact.id);
 
-      savedFacts.push({ ...fact, isNew: false });
+      if (updateError) {
+        console.error('[saveFacts] Error updating fact:', updateError);
+      } else {
+        console.log('[saveFacts] Successfully updated fact');
+        savedFacts.push({ ...fact, isNew: false });
+      }
     } else {
       // Create new fact
+      console.log('[saveFacts] Creating new fact');
       const insertData: LearnerFactInsert = {
         user_id: userId,
         fact_type: fact.factType,
@@ -372,16 +392,19 @@ async function saveFacts(
         is_active: true,
       };
 
-      const { error } = await supabase.from('learner_facts').insert(insertData);
+      console.log('[saveFacts] Insert data:', JSON.stringify(insertData));
+      const { data: inserted, error } = await supabase.from('learner_facts').insert(insertData).select();
 
       if (error) {
-        console.error('Error inserting fact:', error);
+        console.error('[saveFacts] Error inserting fact:', error);
       } else {
+        console.log('[saveFacts] Successfully inserted fact:', inserted);
         savedFacts.push({ ...fact, isNew: true });
       }
     }
   }
 
+  console.log('[saveFacts] Finished. Saved', savedFacts.length, 'facts');
   return savedFacts;
 }
 

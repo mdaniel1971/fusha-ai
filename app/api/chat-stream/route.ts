@@ -118,8 +118,10 @@ When asking grammar questions, ALWAYS provide the phrase context:
 - BAD: "What case is اللَّهِ in?"
 - GOOD: "In بِسْمِ اللَّهِ, what case is اللَّهِ in?"
 
-FIRST MESSAGE:
-"Asalaam alaikum! Let's see where you are with your Arabic. [Ask a basic vocabulary question]"`;
+FIRST MESSAGE RULES:
+- For NEW learners: "Asalaam alaikum! Let's see where you are with your Arabic." + basic vocabulary question
+- For RETURNING learners: "Asalaam alaikum, welcome back!" + brief reference to their progress + question at their level
+- Check the LEARNER PROFILE section below for their history before greeting them`;
 
 // ===========================================
 // META PROMPT - LOGGING RULES
@@ -236,16 +238,34 @@ export async function POST(request: NextRequest) {
     let learnerContextPrompt = "";
     if (learnerContext) {
       const contextText = buildContextPrompt(learnerContext);
+      const hasHistory = learnerContext.facts.struggles.length > 0 ||
+                         learnerContext.facts.strengths.length > 0 ||
+                         learnerContext.lastLesson !== null;
+
+      console.log('[chat-stream] Learner context loaded:', {
+        hasHistory,
+        struggles: learnerContext.facts.struggles.length,
+        strengths: learnerContext.facts.strengths.length,
+        grammarAccuracy: learnerContext.patterns.grammarAccuracy,
+        translationAccuracy: learnerContext.patterns.translationAccuracy,
+        lastLesson: learnerContext.lastLesson?.surahName || 'none',
+      });
+
       learnerContextPrompt = `
 
 === LEARNER PROFILE ===
 ${contextText}
 
-Use this information to personalize the diagnostic:
-- Start at an appropriate difficulty based on their history
+PERSONALIZATION INSTRUCTIONS:
+${hasHistory ? `- This is a RETURNING learner. In your first message, briefly acknowledge you remember them.
+- Start at difficulty level appropriate for their ${learnerContext.patterns.grammarAccuracy}% grammar accuracy
+- If they have struggles listed, work on those areas specifically` :
+`- This is a NEW learner. Start from basics.`}
 - Focus extra attention on their documented struggles
 - Build on their known strengths
-- Reference previous lessons for continuity`;
+- Reference previous lessons for continuity when relevant`;
+    } else {
+      console.log('[chat-stream] No learner context (userId:', userId, ')');
     }
 
     const systemPrompt =
