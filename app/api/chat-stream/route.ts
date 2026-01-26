@@ -193,6 +193,7 @@ export async function POST(request: NextRequest) {
       lessonId,
       userId,
       model = "claude-haiku-4-5-20251001",
+      learningMode = "mix",
     } = await request.json();
 
     // Check quota if userId is provided - return 403 if limit hit
@@ -268,8 +269,36 @@ ${hasHistory ? `- This is a RETURNING learner. In your first message, briefly ac
       console.log('[chat-stream] No learner context (userId:', userId, ')');
     }
 
+    // Build learning mode instructions
+    let learningModePrompt = "";
+    if (learningMode === "translation") {
+      learningModePrompt = `
+=== LEARNING MODE: TRANSLATION ONLY ===
+Focus ONLY on vocabulary and translation questions:
+- Ask what Arabic words mean in English
+- Ask how to say English words in Arabic
+- Do NOT ask grammar questions (parts of speech, cases, etc)
+- Log all answers with [TRANS:...] tags`;
+    } else if (learningMode === "grammar") {
+      learningModePrompt = `
+=== LEARNING MODE: GRAMMAR ONLY ===
+Focus ONLY on grammar questions:
+- Ask about parts of speech (noun, verb, particle, etc)
+- Ask about grammatical cases (nominative, accusative, genitive)
+- Ask about verb forms, roots, gender, number
+- Do NOT ask translation/vocabulary questions
+- Log all answers with [GRAM:...] tags`;
+    } else {
+      learningModePrompt = `
+=== LEARNING MODE: MIX ===
+Alternate between translation and grammar questions:
+- Ask a translation question, then a grammar question, then translation, etc.
+- Keep track of which type you asked last and switch
+- Log translation answers with [TRANS:...] and grammar with [GRAM:...]`;
+    }
+
     const systemPrompt =
-      DIAGNOSTIC_PROMPT + learnerContextPrompt + "\n" + surahPrompt;
+      DIAGNOSTIC_PROMPT + learnerContextPrompt + learningModePrompt + "\n" + surahPrompt;
 
     const claudeMessages = messages.map(
       (msg: { role: string; content: string }) => ({
@@ -381,31 +410,45 @@ ${hasHistory ? `- This is a RETURNING learner. In your first message, briefly ac
           const observationSessionId = lessonId || sessionId;
 
           if (observationSessionId && fullResponse) {
+            // Debug: log raw response to check for tags
             const gramMatch = fullResponse.match(/\[GRAM:[^\]]+\]/g);
+            const transMatch = fullResponse.match(/\[TRANS:[^\]]+\]/g);
+            console.log('[chat-stream] Observation tags found:', {
+              grammarTags: gramMatch?.length || 0,
+              translationTags: transMatch?.length || 0,
+              rawGramTags: gramMatch,
+              rawTransTags: transMatch,
+            });
+
             if (gramMatch) {
               const { observations: grammarObs } = parseGrammarObservations(
                 fullResponse,
                 observationSessionId,
                 userId,
               );
+              console.log('[chat-stream] Parsed grammar observations:', grammarObs.length);
               if (grammarObs.length > 0) {
-                logGrammarObservations(grammarObs).catch((err: Error) =>
-                  console.error('Failed to log grammar observations:', err),
-                );
+                logGrammarObservations(grammarObs)
+                  .then((result) => console.log('[chat-stream] Grammar obs logged:', result))
+                  .catch((err: Error) =>
+                    console.error('Failed to log grammar observations:', err),
+                  );
               }
             }
 
-            const transMatch = fullResponse.match(/\[TRANS:[^\]]+\]/g);
             if (transMatch) {
               const { observations: transObs } = parseTranslationObservations(
                 fullResponse,
                 observationSessionId,
                 userId,
               );
+              console.log('[chat-stream] Parsed translation observations:', transObs.length);
               if (transObs.length > 0) {
-                logTranslationObservations(transObs).catch((err: Error) =>
-                  console.error('Failed to log translation observations:', err),
-                );
+                logTranslationObservations(transObs)
+                  .then((result) => console.log('[chat-stream] Translation obs logged:', result))
+                  .catch((err: Error) =>
+                    console.error('Failed to log translation observations:', err),
+                  );
               }
             }
           }

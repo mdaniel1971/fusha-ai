@@ -8,8 +8,11 @@ export async function POST(request: NextRequest) {
   try {
     const { sessionId, lessonId, userId } = await request.json();
 
+    console.log('[report] Received IDs:', { sessionId, lessonId, userId });
+
     // Use lessonId for observations (new flow) or fall back to sessionId (legacy)
     const observationSessionId = lessonId || sessionId;
+    console.log('[report] Using observationSessionId:', observationSessionId);
 
     if (!observationSessionId) {
       return new Response(
@@ -35,7 +38,23 @@ export async function POST(request: NextRequest) {
     // Use lessonId if available, otherwise fall back to sessionId
     const factSessionId = lessonId || sessionId;
     if (factSessionId && userId) {
-      console.log('Extracting facts for session:', factSessionId, 'user:', userId);
+      // Debug: Check what observations exist for this session
+      const { data: gramObs } = await supabaseServer
+        .from('grammar_observations')
+        .select('id, session_id, grammar_feature, is_correct')
+        .eq('session_id', factSessionId);
+      const { data: transObs } = await supabaseServer
+        .from('translation_observations')
+        .select('id, session_id, is_correct')
+        .eq('session_id', factSessionId);
+      console.log('[report] Observations in DB for session:', {
+        factSessionId,
+        grammarCount: gramObs?.length || 0,
+        translationCount: transObs?.length || 0,
+        grammarObs: gramObs?.slice(0, 3),
+      });
+
+      console.log('[report] Extracting facts for session:', factSessionId, 'user:', userId);
       analysis = await extractLessonFacts(factSessionId, userId);
 
       const effectiveUserId = analysis?.userId || userId;
